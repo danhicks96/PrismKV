@@ -40,6 +40,7 @@ jobs:
             tests/test_learned_codebooks.py \
             tests/test_bias_correction.py \
             tests/test_bit_alloc.py \
+            tests/test_polar_attention.py \
             -v --tb=short
 
       - name: Coverage (core quantizer modules)
@@ -50,6 +51,7 @@ jobs:
             tests/test_learned_codebooks.py \
             tests/test_bias_correction.py \
             tests/test_bit_alloc.py \
+            tests/test_polar_attention.py \
             --cov=src/prismkv/quantizer \
             --cov-report=term-missing \
             --cov-fail-under=85
