@@ -1,8 +1,11 @@
 # PrismKV: 3-D Stacked-Plane KV Cache Quantization
 
+[![CI](https://github.com/danhicks96/PrismKV/actions/workflows/ci.yml/badge.svg)](https://github.com/danhicks96/PrismKV/actions/workflows/ci.yml)
+
 **First published:** 2026-03-30
 **Author:** Dan Hicks · [github.com/danhicks96](https://github.com/danhicks96)
 **License:** Apache-2.0
+**Version:** 0.6.0
 **Status:** Defensive prior-art publication. All ideas herein are released under Apache-2.0.
 
 ---
@@ -135,22 +138,21 @@ The 3-D scheme at `B_z=3, B_r=3, B_θ=2` (2.67 bits/dim) has no 2-D equivalent �
 
 ## Comparison to Related Work
 
-| Method | Training required | Conditioning | Unbiased attention scores |
-|--------|------------------|--------------|--------------------------|
-| TurboQuant (2026) | None | None (independent 2-D pairs) | Yes (QJL) |
-| **PrismKV v1** | **None** | **z-conditioned 2-D polar** | Empirically small bias |
-| KIVI | Calibration data | None | No |
-| SnapKV | Fine-tuning | None | No |
-| Product Quantization | Dataset training | None | No |
+| Method | Training required | Conditioning | Bias correction | Adaptive bits |
+|--------|------------------|--------------|-----------------|---------------|
+| TurboQuant (2026) | None | None (independent 2-D pairs) | Yes (QJL) | No |
+| **PrismKV v1** | **None** | **z-conditioned 2-D polar** | No | No |
+| **PrismKV v2** | **K-means calibration** | **Per-z-bin learned codebooks** | **Yes (BiasTable)** | **Yes (entropy water-filling)** |
+| KIVI | Calibration data | None | No | No |
+| SnapKV | Fine-tuning | None | No | No |
+| Product Quantization | Dataset training | None | No | No |
 
 **What is new in PrismKV:**
 1. The triplet partition `(z, x, y)` with no overlapping coordinates
 2. Using the coarsely-quantized `z` index to *select* per-slice codebooks for `(x, y)` — a conditional product quantizer in 3-D
-3. The architecture for per-z-slice learned codebooks (v2), not possible in any 2-D scheme without a separate full-dimensional index
-
-**What is not claimed:**
-- PrismKV v1 does not yet beat TurboQuant on empirical benchmarks. The per-slice tables are uniform (same as baseline). The advantage materializes with learned tables (v2) on real, non-Gaussian KV distributions.
-- Full QJL-style attention score unbiasedness is v2 work.
+3. Per-z-slice learned codebooks trained via pure-torch k-means — not possible in any 2-D scheme without a separate full-dimensional index
+4. Per-z-bin bias correction table (QJL-style, no training required beyond calibration)
+5. Water-filling adaptive bit allocation from per-head attention entropy
 
 ---
 
@@ -181,7 +183,14 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-All 9 tests should pass.
+All 131 tests pass (36 core, 95 eval+cache+RAG).
+
+For the full suite including RAG and cache tests:
+
+```bash
+pip install -e ".[dev,eval,cache,rag]"
+pytest tests/ -v
+```
 
 ---
 
@@ -189,37 +198,99 @@ All 9 tests should pass.
 
 ```
 PrismKV/
-├── src/
-│   └── prismkv/
-│       ├── __init__.py                  — package entry point
-│       ├── utils.py                     — make_rotation(), calibrate_r_max()
-│       └── quantizer/
-│           ├── __init__.py
-│           ├── baseline_2d.py           — 2-D polar quantizer (TurboQuant-style)
-│           └── stacked_plane.py         — 3-D conditional quantizer (PrismKV)
-├── tests/
-│   └── test_quantizer.py                — 9 unit tests
+├── src/prismkv/
+│   ├── quantizer/
+│   │   ├── stacked_plane.py      — 3-D conditional quantizer (core prior art)
+│   │   ├── baseline_2d.py        — 2-D polar baseline (TurboQuant-style)
+│   │   ├── learned_codebook.py   — per-z-bin k-means codebooks (M1)
+│   │   ├── bias_correction.py    — QJL-style per-z-bin bias table (M4)
+│   │   └── bit_alloc.py          — water-filling adaptive bit allocation (M7)
+│   ├── eval/
+│   │   ├── kv_collector.py       — transformers 5.x KV hook collector (M2)
+│   │   ├── benchmark.py          — RMSE / cosine / throughput benchmarks (M2)
+│   │   └── attention_entropy.py  — per-head Shannon entropy (M7)
+│   ├── cache/
+│   │   ├── kv_cache.py           — PrismKVCache(DynamicCache) drop-in (M3)
+│   │   ├── cache_config.py       — PrismKVConfig dataclass
+│   │   └── dim_aligner.py        — pad head_dim to multiple of 3
+│   └── rag/
+│       ├── rag_engine.py         — RAGEngine public API (M6)
+│       ├── vector_store.py       — SQLite + pure-torch cosine store
+│       ├── graph_index.py        — NetworkX DiGraph + BFS expansion
+│       ├── ingestion.py          — IngestionEngine with deduplication
+│       ├── retriever.py          — hybrid vector + graph retrieval
+│       ├── context_assembler.py  — token-budget-aware context builder
+│       ├── adapters.py           — TextAdapter, DictAdapter, FileAdapter
+│       └── schema.py             — Chunk, Node, RetrievalResult
+├── tests/                        — 131 tests across all modules
 ├── examples/
-│   └── demo.py                          — runnable comparison demo
-├── design.md                            — full architecture & math specification
-├── pyproject.toml
-├── requirements.txt
-└── README.md
+│   ├── demo.py                   — 2-D vs 3-D quantizer comparison
+│   ├── hf_integration.py         — GPT-2 with PrismKVCache
+│   ├── rag_demo.py               — CPU-only RAG pipeline demo
+│   ├── usurper_rag_demo.py       — 50-dict game-state ingestion
+│   └── adaptive_demo.py          — BitAllocator → PrismKVCache
+├── scripts/
+│   ├── build_codebooks.py        — CLI: train learned codebooks
+│   └── collect_kv_calibration.py — extract KV tensors from GPT-2
+├── design.md                     — full architecture & math specification
+└── pyproject.toml
 ```
 
 ---
 
-## Roadmap
+## What's Shipped
 
-### v2 (planned)
-- **Learned per-z-slice codebooks** — k-means on real KV distributions per z-bin; this is where the theoretical advantage of conditioning is realized
-- **QJL-style bias correction** — unbiased attention score estimation for the z-conditioned scheme
-- **KVCacheWrapper** — drop-in replacement for raw PyTorch KV tensor caches in HuggingFace-compatible models
+| Milestone | Version | Description |
+|-----------|---------|-------------|
+| M1 | 0.2.0 | Learned per-z-slice codebooks — k-means on real KV distributions |
+| M2 | 0.2.0 | KV benchmarking eval layer — RMSE, cosine sim, throughput |
+| M3 | 0.2.0 | `PrismKVCache(DynamicCache)` — drop-in HuggingFace cache replacement |
+| M4 | 0.3.0 | QJL-style bias correction — per-z-bin `BiasTable` |
+| M5 | 0.4.0 | CI/CD — GitHub Actions + PyPI OIDC trusted publishing |
+| M6 | 0.5.0 | RAG framework — vector store, graph index, adapters, RAGEngine |
+| M7 | 0.6.0 | Adaptive bit allocation — water-filling from attention entropy |
+
+### Still planned
 - **CUDA kernel** — on-the-fly dequantization fused with attention computation
+- **ONNX export** — quantized cache for inference engines
 
-### v3 (planned)
-- **RAG framework** — Adapters (text, embedding, API), IngestionEngine (graph-indexed chunks), RAG Engine (retrieval + context assembly + generation hook) using PrismKV for the KV cache layer
-- **Adaptive bit allocation** — per-layer or per-head bit budgets based on attention entropy
+## RAG Framework (M6)
+
+PrismKV ships a complete RAG pipeline that uses the compressed KV cache internally:
+
+```python
+from prismkv.rag import RAGEngine
+from prismkv.rag.adapters import DictAdapter
+
+engine = RAGEngine(db_path=":memory:", embedder=my_embed_fn)
+
+# Ingest — any adapter: text file, dict list, plain string
+engine.ingest(DictAdapter(game_states, entity_key="name"))
+
+# Query
+results = engine.retrieve("throne room conflict", top_k=5)
+
+# Generate
+response = engine.generate("What happened at the throne room?", generation_fn=my_llm)
+```
+
+Hybrid retrieval: cosine vector search + NetworkX graph BFS expansion. SHA-256 content deduplication. Token-budget-aware context assembly.
+
+## Adaptive Bit Allocation (M7)
+
+Per-head bit budgets derived from attention entropy — sharp heads (low entropy) get more bits:
+
+```python
+from prismkv.quantizer.bit_alloc import BitAllocator
+from prismkv.cache import PrismKVCache
+
+allocator = BitAllocator(entropy, target_avg_bits_per_dim=4.0).compute()
+configs = allocator.to_prism_configs(per_head=False)  # one PrismKVConfig per layer
+
+cache = PrismKVCache(configs=configs)
+```
+
+The allocator uses water-filling (`sensitivity = 1/H(l,h)`) with a greedy post-rounding correction that guarantees the mean bits/dim is within `1/(6n)` of target after discretisation.
 
 ---
 
