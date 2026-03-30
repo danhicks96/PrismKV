@@ -31,6 +31,7 @@ import torch
 
 from prismkv.utils import make_rotation
 from prismkv.quantizer.learned_codebook import LearnedSliceCodebook
+from prismkv.quantizer.bias_correction import BiasTable, calibrate_bias
 
 
 class StackedPlaneQuantizer:
@@ -98,6 +99,9 @@ class StackedPlaneQuantizer:
 
         # Learned codebooks (None = use uniform polar fallback)
         self._codebooks: Optional[LearnedSliceCodebook] = None
+
+        # Bias correction table (None = no correction)
+        self._bias: Optional[BiasTable] = None
 
     # ------------------------------------------------------------------
     # Optional calibration
@@ -255,8 +259,51 @@ class StackedPlaneQuantizer:
         rotated_q[:, self.x_idx] = x_q
         rotated_q[:, self.y_idx] = y_q
 
+        # --- Apply bias correction (if calibrated) ---
+        if self._bias is not None:
+            rotated_q = self._bias.apply(
+                rotated_q, i_z,
+                self.z_idx, self.x_idx, self.y_idx,
+            )
+
         # --- Un-rotate ---
         return rotated_q @ self.R_inv.T                       # (N, dim)
+
+    # ------------------------------------------------------------------
+    # Bias calibration
+    # ------------------------------------------------------------------
+
+    def calibrate_bias(
+        self,
+        vectors: torch.Tensor,
+        holdout_fraction: float = 0.2,
+        seed: int = 0,
+    ) -> None:
+        """
+        Estimate and store a per-z-bin mean reconstruction bias table.
+
+        After calling this, decode() will subtract the estimated bias from
+        each reconstructed vector, reducing systematic error.
+
+        Parameters
+        ----------
+        vectors          : Tensor shape (N, dim) — raw (unrotated) KV vectors
+        holdout_fraction : fraction withheld for unbiased bias estimation
+        seed             : RNG seed for train/holdout split
+
+        Notes
+        -----
+        Call calibrate() first to tighten z_min/z_max/r_max from real data.
+        Calibration should use the same distribution as inference.
+        This corrects vector-level mean bias only; attention-score-level
+        correction (QJL-style) requires Q at decode time (not implemented here).
+        """
+        self._bias = calibrate_bias(
+            quantizer=self,
+            vectors=vectors,
+            holdout_fraction=holdout_fraction,
+            seed=seed,
+        )
 
     # ------------------------------------------------------------------
     # Diagnostics
