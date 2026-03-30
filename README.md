@@ -158,8 +158,10 @@ The 3-D scheme at `B_z=3, B_r=3, B_θ=2` (2.67 bits/dim) has no 2-D equivalent �
 
 ## Benchmark Results (Real GPT-2 Data)
 
-Measured on 73,728 KV vectors from GPT-2 (12 layers × 12 heads × 512 tokens, Moby Dick Ch. 1).
+Rows 1–5: measured on 73,728 KV vectors from GPT-2 (12 layers × 12 heads × 512 tokens, Moby Dick Ch. 1).
 Head dim 64 padded to 66. Codebooks trained in-distribution (all 12 layers). CPU-only.
+Row 6 (M13): measured on a 10,000-vector subsample from `gpt2_all_layers_keys.pt`
+via [`results/bit_split_search.json`](results/bit_split_search.json) (grid search over bit splits).
 
 | Scheme                                | bits/dim | RMSE   | CosSim | Mem/4K |
 |---------------------------------------|----------|--------|--------|--------|
@@ -168,13 +170,15 @@ Head dim 64 padded to 66. Codebooks trained in-distribution (all 12 layers). CPU
 | 2D Polar (uniform)                    | 4.0      | 0.336  | 0.988  | 3.0 MB |
 | 3D Stacked-Plane (uniform)            | 4.0      | 0.778  | 0.883  | 3.0 MB |
 | **3D Stacked-Plane (learned)**        | **4.0**  | **0.612** | **0.926** | **3.0 MB** |
-| **3D + Lloyd-Max z + learned (M13)**  | **4.0**  | **0.369** | **0.952** | **3.0 MB** |
-| 3D Stacked-Plane 3+3+2               | 2.67     | 1.895  | 0.575  | 2.0 MB |
+| **3D + Lloyd-Max z (M13)** †          | **4.0**  | **0.369** | **0.986** | **3.0 MB** |
 
-**M13 improvement over 3D uniform: 14.5% RMSE reduction** (0.432 → 0.369) via Lloyd-Max optimal z quantizer; **58.3% z-component MSE reduction** over uniform z binning.
+† M13 row uses 10k-vector subsample; baseline rows use 73,728-vector dataset.
+All numbers from committed result files — see links below.
 
-**Memory savings vs FP16: 4× at 4 bits/dim.** The 3+3+2 config reaches 2.67 bits/dim (6× vs FP16) — a
-ratio unreachable by integer-bit 2D polar, which requires even bits/dim (2.0, 4.0, 6.0, …).
+**M13 improvement over 3D uniform (same 10k dataset): 14.5% RMSE reduction** (0.432 → 0.369)
+via Lloyd-Max optimal z quantizer; **58.3% z-component MSE reduction** over uniform z binning.
+
+**Memory savings vs FP16: 4× at 4 bits/dim.**
 
 Full results and methodology: [`results/benchmark_gpt2.json`](results/benchmark_gpt2.json),
 [`results/benchmark_gpt2_notes.md`](results/benchmark_gpt2_notes.md), and
