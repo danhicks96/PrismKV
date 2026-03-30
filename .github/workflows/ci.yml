@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # -----------------------------------------------------------------------
+  # test-core: quantizer + learned codebooks + bias correction
+  # No transformers required. Must pass in <2 min.
+  # -----------------------------------------------------------------------
+  test-core:
+    name: Core tests (no transformers)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install core dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+
+      - name: Run core tests
+        run: |
+          python -m pytest \
+            tests/test_quantizer.py \
+            tests/test_learned_codebooks.py \
+            tests/test_bias_correction.py \
+            -v --tb=short
+
+      - name: Coverage (core)
+        run: |
+          pip install pytest-cov
+          python -m pytest \
+            tests/test_quantizer.py \
+            tests/test_learned_codebooks.py \
+            tests/test_bias_correction.py \
+            --cov=src/prismkv \
+            --cov-report=term-missing \
+            --cov-fail-under=85
+
+  # -----------------------------------------------------------------------
+  # test-eval: KV collector + cache + benchmark (requires transformers)
+  # Permitted 10 min. PyPI publish does NOT wait for this job.
+  # -----------------------------------------------------------------------
+  test-eval:
+    name: Eval + cache tests (transformers)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install all dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,eval,cache]"
+
+      - name: Run eval + cache tests
+        timeout-minutes: 10
+        run: |
+          python -m pytest \
+            tests/test_kv_collector.py \
+            tests/test_kv_cache.py \
+            -v --tb=short
