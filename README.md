@@ -5,7 +5,7 @@
 **First published:** 2026-03-30
 **Author:** Dan Hicks · [github.com/danhicks96](https://github.com/danhicks96)
 **License:** Apache-2.0
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Status:** Defensive prior-art publication. All ideas herein are released under Apache-2.0.
 
 ---
@@ -212,6 +212,9 @@ PrismKV/
 │   │   ├── model_arch.py         — ModelArchRegistry + GQA support (M8)
 │   │   └── e2e_benchmark.py      — memory table + quality report (M11)
 │   ├── cache/
+│   │   ├── backend.py            — CacheBackend protocol + PrismKVBackend (M12)
+│   │   ├── raw_cache.py          — RawKVCache: framework-agnostic (M12)
+│   │   ├── vllm_adapter.py       — VLLMSwapCompressor (M12)
 │   │   ├── kv_cache.py           — PrismKVCache(DynamicCache) drop-in (M3)
 │   │   ├── cache_config.py       — PrismKVConfig dataclass
 │   │   ├── dim_aligner.py        — pad head_dim to multiple of 3
@@ -225,7 +228,8 @@ PrismKV/
 │       ├── context_assembler.py  — token-budget-aware context builder
 │       ├── adapters.py           — TextAdapter, DictAdapter, FileAdapter, APIAdapter
 │       └── schema.py             — Chunk, Node, RetrievalResult
-├── tests/                        — 170+ tests across all modules
+├── src/prismkv/sidecar.py            — HTTP compression service (M12)
+├── tests/                        — 234 tests across all modules
 ├── examples/
 │   ├── demo.py                   — 2-D vs 3-D quantizer comparison
 │   ├── hf_integration.py         — GPT-2 with PrismKVCache
@@ -235,7 +239,8 @@ PrismKV/
 ├── scripts/
 │   ├── build_codebooks.py        — CLI: train learned codebooks
 │   ├── collect_kv_calibration.py — extract KV tensors from GPT-2
-│   └── run_e2e_benchmark.py      — CLI: memory + quality benchmark (M11)
+│   ├── run_e2e_benchmark.py      — CLI: memory + quality benchmark (M11)
+│   └── run_sidecar.py            — CLI: start HTTP sidecar (M12)
 ├── design.md                     — full architecture & math specification
 └── pyproject.toml
 ```
@@ -257,6 +262,7 @@ PrismKV/
 | M9 | 0.8.0 | Polar-space attention approximation — novel prior-art contribution |
 | M10 | 0.9.0 | Cache persistence (`save_cache`/`load_cache`) + `APIAdapter` |
 | M11 | 1.0.0 | End-to-end benchmark — memory table + quality comparison |
+| M12 | 1.1.0 | Framework-agnostic layer — `RawKVCache`, vLLM adapter, HTTP sidecar |
 
 ### Future work
 - **CUDA kernel** — fused dequantization + QK dot product in a single kernel
@@ -389,6 +395,90 @@ For pseudo-perplexity measurement (requires GPT-2 download):
 ```bash
 python scripts/run_e2e_benchmark.py --pseudo-ppl
 ```
+
+## Framework-Agnostic Integration (M12)
+
+PrismKV v1.1.0 works with any inference engine — not just HuggingFace.
+
+### Custom autoregressive loop (no framework)
+
+```python
+from prismkv.cache import PrismKVBackend, RawKVCache, PrismKVConfig
+
+backend = PrismKVBackend(PrismKVConfig(), head_dim=64)
+cache = RawKVCache(backend)
+
+# Inside your generation loop:
+for step in range(max_new_tokens):
+    k_new, v_new = my_model_attention(x)           # (..., seq_len, head_dim)
+    k_ctx, v_ctx = cache.update(layer_idx, k_new, v_new)  # full context
+    attn_out = scaled_dot_product_attention(q, k_ctx, v_ctx)
+
+print(cache.memory_footprint())  # {'compression': 3.2, 'codes_bytes': ...}
+```
+
+Per-layer bit budgets:
+
+```python
+from prismkv.cache import PrismKVBackend, RawKVCache, PrismKVConfig
+
+backends = {
+    i: PrismKVBackend(PrismKVConfig(bits_z=3, bits_r=3, bits_theta=3), head_dim=64)
+    if i < 6
+    else PrismKVBackend(PrismKVConfig(), head_dim=64)
+    for i in range(12)
+}
+cache = RawKVCache(backends)  # 3 bits for layers 0-5, 4 bits for 6-11
+```
+
+### vLLM — compress at CPU swap boundary
+
+```python
+from prismkv.cache import VLLMSwapCompressor, PrismKVConfig
+
+compressor = VLLMSwapCompressor(
+    config=PrismKVConfig(bits_z=4, bits_r=4, bits_theta=4),
+    head_dim=128,
+    n_layers=32,
+)
+compressor.attach(engine)   # patches engine.cache_engine swap_out/swap_in
+```
+
+KV blocks evicted to CPU are compressed 3–5× before leaving GPU. Active GPU blocks and attention kernels are untouched.
+
+### HTTP sidecar — any language, any engine
+
+```bash
+# Start the sidecar (stdlib only, no extra deps):
+python -m prismkv.sidecar --port 8765
+```
+
+```python
+import requests, numpy as np
+
+k = np.random.randn(10, 64).astype(np.float32)
+v = np.random.randn(10, 64).astype(np.float32)
+
+# Compress
+codes = requests.post("http://localhost:8765/compress",
+    json={"k": k.tolist(), "v": v.tolist()}).json()
+
+# Decompress
+result = requests.post("http://localhost:8765/decompress",
+    json={"k_codes": codes["k_codes"], "v_codes": codes["v_codes"],
+          "head_dim": 64}).json()
+k_hat = np.array(result["k"])
+```
+
+The sidecar is the integration path for engines that manage their KV cache in C++ (llama.cpp, Ollama) — intercept tensors at the application layer before they reach the engine.
+
+| Engine | Integration |
+|---|---|
+| HuggingFace | `PrismKVCache(DynamicCache)` — drop-in, unchanged |
+| Custom PyTorch | `RawKVCache(PrismKVBackend(...))` — no framework needed |
+| vLLM | `VLLMSwapCompressor.attach(engine)` |
+| llama.cpp / Ollama | HTTP sidecar via `python -m prismkv.sidecar` |
+| Any language | HTTP POST to sidecar |
 
 ---
 
