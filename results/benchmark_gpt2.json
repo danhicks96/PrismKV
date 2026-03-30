@@ -1,0 +1,35 @@
+[
+  {
+    "name": "2D Polar (uniform)",
+    "bits_per_dim": 4.0,
+    "rmse": 0.3364325761795044,
+    "cosine_sim_mean": 0.988260805606842,
+    "cosine_sim_min": 0.9013919830322266,
+    "relative_error_mean": 0.1526799201965332,
+    "memory_mb_4k": 3.0,
+    "throughput_vps": 715640.1441729213,
+    "n_vectors": 73728
+  },
+  {
+    "name": "3D Stacked-Plane (uniform)",
+    "bits_per_dim": 4.0,
+    "rmse": 0.7781224846839905,
+    "cosine_sim_mean": 0.8825178742408752,
+    "cosine_sim_min": -0.2623583674430847,
+    "relative_error_mean": 0.48402008414268494,
+    "memory_mb_4k": 3.0,
+    "throughput_vps": 1592383.3771865133,
+    "n_vectors": 73728
+  },
+  {
+    "name": "3D Stacked-Plane (learned)",
+    "bits_per_dim": 4.0,
+    "rmse": 0.6119071245193481,
+    "cosine_sim_mean": 0.9256098866462708,
+    "cosine_sim_min": 0.5279218554496765,
+    "relative_error_mean": 0.37329375743865967,
+    "memory_mb_4k": 3.0,
+    "throughput_vps": 108883.04645256152,
+    "n_vectors": 73728
+  }
+]
