@@ -9,7 +9,8 @@ git clone https://github.com/danhicks96/PrismKV
 cd PrismKV
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e ".[dev]"
-pytest tests/test_quantizer.py tests/test_learned_codebooks.py tests/test_bias_correction.py -v
+pytest tests/test_quantizer.py tests/test_learned_codebooks.py \
+       tests/test_bias_correction.py tests/test_calibration_quality.py -v
 ```
 
 ## Running All Tests
@@ -19,14 +20,15 @@ pytest tests/test_quantizer.py tests/test_learned_codebooks.py tests/test_bias_c
 pip install -e ".[dev]"
 pytest tests/test_quantizer.py tests/test_learned_codebooks.py \
        tests/test_bias_correction.py tests/test_bit_alloc.py \
-       tests/test_polar_attention.py tests/test_e2e_benchmark.py -v
+       tests/test_polar_attention.py tests/test_e2e_benchmark.py \
+       tests/test_m12_framework_agnostic.py tests/test_calibration_quality.py -v
 
 # Full suite (requires transformers + networkx, ~5 min)
 pip install -e ".[dev,eval,cache,rag]"
 pytest tests/ -v
 ```
 
-234 tests total across all modules.
+306 tests total across all modules (169 core, 137 eval+cache+RAG+validation).
 
 ## Contribution Guidelines
 
@@ -41,10 +43,14 @@ pytest tests/ -v
 
 ```
 src/prismkv/
-├── quantizer/    — StackedPlaneQuantizer, PolarQuantizer2D, codebooks, bias, bit_alloc
-├── cache/        — PrismKVCache (HuggingFace DynamicCache subclass), cache_store
-├── eval/         — KVCollector, benchmark, ModelArchRegistry, e2e_benchmark
-└── rag/          — RAG framework: RAGEngine, VectorStore, GraphIndex, adapters
+├── quantizer/    — StackedPlaneQuantizer, PolarQuantizer2D, codebooks, bias,
+│                   bit_alloc, lloyd_max (optimal z quantizer)
+├── cache/        — PrismKVCache (HuggingFace DynamicCache subclass), cache_store,
+│                   RawKVCache, VLLMSwapCompressor, CacheBackend
+├── eval/         — KVCollector, benchmark, ModelArchRegistry, e2e_benchmark,
+│                   attention_entropy
+├── rag/          — RAG framework: RAGEngine, VectorStore, GraphIndex, adapters
+└── cuda/         — fused dequantize + polar attention kernel (requires CUDA to build)
 ```
 
 ## PyPI Publishing
