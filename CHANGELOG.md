@@ -4,6 +4,31 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [1.3.0] — 2026-03-30
+
+### Added
+- **M13 Optimal Quantization Calibration** — closes the primary 3D vs 2D quality gap
+  identified in the GPT-2 real-data benchmark (3D RMSE 0.612 → 0.369 at 4 bits/dim)
+- `src/prismkv/quantizer/lloyd_max.py` — `LloydMaxQuantizer1D`: iterative Lloyd-Max
+  optimal 1-D scalar quantizer; reduces z-axis MSE by **58.3%** vs uniform binning on
+  real GPT-2 KV data (target ≥15%); encode via `torch.bucketize`, decode via centroid
+  lookup; serialises `z_boundaries`/`z_centroids` into `.npz`
+- `StackedPlaneQuantizer.calibrate(percentile_clip=0.005)` — optional tail clipping
+  tightens z/r ranges for the bulk of the distribution (0.0 = unchanged default)
+- `StackedPlaneQuantizer.calibrate_lloyd_max_z()` — fits Lloyd-Max on empirical z
+  distribution; activates optimal bins in encode() and decode()
+- `StackedPlaneQuantizer.save_lloyd_max_z()` / `load_lloyd_max_z()` — persist fitted
+  quantizer to `.npz` alongside existing codebooks
+- `scripts/find_optimal_bit_split.py` — grid search over all valid (bz, br, bt) splits
+  at a fixed bits/dim budget; produces comparison table vs 2D polar and 3D uniform
+- `results/bit_split_search.json` — committed benchmark: equal split (4,4,4) is optimal
+  at 4 bits/dim; Lloyd-Max improves z-MSE 58.3%, overall RMSE 0.432 → 0.369 (14.5%)
+- `tests/test_calibration_quality.py` — 43 tests: Lloyd-Max convergence, boundary
+  monotonicity, MSE improvement on non-uniform distributions, percentile clip,
+  end-to-end integration, serialisation round-trips
+
+---
+
 ## [1.2.0] — 2026-03-30
 
 ### Added
