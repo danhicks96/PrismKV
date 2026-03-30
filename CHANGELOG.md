@@ -4,6 +4,28 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [1.2.0] — 2026-03-30
+
+### Added
+- **M15 CUDA Kernel Prior Art** — complete, compilable CUDA C++ kernel for fused
+  dequantize + polar attention (`src/prismkv/cuda/polar_attn_kernel.cu`, ~350 lines)
+- `src/prismkv/cuda/__init__.py` — Python interface; dispatches to compiled extension
+  when available, falls back to `polar_attention.py` on CPU-only hosts
+- `src/prismkv/cuda/prismkv_cuda.cpp` — pybind11 entry point for PyTorch CUDAExtension
+- `setup_cuda.py` — `CUDAExtension` build script; run `python setup_cuda.py build_ext
+  --inplace` on a CUDA ≥ 11.8 host to compile
+- `tests/test_cuda_kernel.py` — 16 CPU-mode tests validating fallback correctness and
+  parameter contracts without requiring CUDA
+- `design.md` §7 — full kernel specification: thread-block layout, occupancy analysis,
+  3× DRAM bandwidth savings formula, ~5m FLOPs per (q,k) pair, sm_80/86/89/90 targets
+- `design.md` §7 — llama.cpp / consumer inference C++ memory layout spec: packed
+  `prismkv_codeword_t` (uint32), `prismkv_layer_params_t` (40 bytes), static 3-D
+  Cartesian codebook (16 KB, zero-trig inference path), GGML block structure
+  `block_q_prismkv_4b` (26 bytes / 48 dims = 3.7× vs FP16), nibble unpacking
+  `prismkv_unpack_2triplets` — constitutes prior art for consumer local LLM integration
+
+---
+
 ## [1.1.1] — 2026-03-30
 
 ### Added
