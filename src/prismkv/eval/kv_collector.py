@@ -4,7 +4,11 @@ kv_collector.py — Extract KV cache tensors from HuggingFace models via forward
 Captures raw (key_states, value_states) per attention layer for a calibration
 corpus.  One layer is collected at a time to bound memory usage.
 
-Handles head_dim not divisible by 3 via zero-padding (e.g. GPT-2 head_dim=64 → 66).
+Handles:
+  - GPT-2 style combined QKV projections
+  - LLaMA / Mistral separate k_proj / v_proj (hooks two sub-modules)
+  - Grouped Query Attention (n_kv_heads < n_heads)
+  - head_dim not divisible by 3 via zero-padding (GPT-2 64 → 66)
 
 Author: Dan Hicks (github.com/danhicks96)
 """
@@ -22,6 +26,8 @@ try:
 except ImportError:
     HAS_TRANSFORMERS = False
 
+from prismkv.eval.model_arch import ModelArchRegistry, get_n_kv_heads
+
 
 def _check_transformers() -> None:
     if not HAS_TRANSFORMERS:
@@ -32,7 +38,7 @@ def _check_transformers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Dim alignment helper
+# Dim alignment helpers
 # ---------------------------------------------------------------------------
 
 def pad_to_multiple_of_3(tensor: torch.Tensor) -> torch.Tensor:
@@ -46,8 +52,7 @@ def pad_to_multiple_of_3(tensor: torch.Tensor) -> torch.Tensor:
     rem = d % 3
     if rem == 0:
         return tensor
-    pad = 3 - rem
-    return torch.nn.functional.pad(tensor, (0, pad))
+    return torch.nn.functional.pad(tensor, (0, 3 - rem))
 
 
 def unpad_from_multiple_of_3(tensor: torch.Tensor, original_dim: int) -> torch.Tensor:
@@ -66,19 +71,17 @@ class KVCollector:
     Parameters
     ----------
     model_name : str
-        HuggingFace model identifier, e.g. "gpt2" or "facebook/opt-125m".
+        HuggingFace model identifier, e.g. "gpt2", "meta-llama/Llama-3.2-1B".
     device : str
         Torch device string, e.g. "cpu" or "cuda:0".
     pad_dim : bool
-        If True (default), pad head_dim to nearest multiple of 3 so the output
-        is usable directly with StackedPlaneQuantizer.
+        If True (default), pad head_dim to nearest multiple of 3.
 
-    Usage
+    Notes
     -----
-        collector = KVCollector("gpt2")
-        result = collector.collect(text, layer_indices=[0, 1, 2])
-        # result["layer_0"]["keys"]   shape: (n_tokens, head_dim_padded)
-        # result["layer_0"]["values"] shape: (n_tokens, head_dim_padded)
+    GQA models (LLaMA-2-70B, Mistral-7B, …) produce KV tensors with shape
+    (batch, n_kv_heads, seq, head_dim) where n_kv_heads < n_heads.
+    ``self.n_kv_heads`` reflects this; collected vectors are labelled per KV head.
     """
 
     def __init__(
@@ -99,10 +102,12 @@ class KVCollector:
         ).to(device)
         self.model.eval()
 
-        # Will be populated after first collect() call
         self.original_head_dim: Optional[int] = None
         self.padded_head_dim: Optional[int] = None
         self.n_layers: int = self.model.config.num_hidden_layers
+        self.n_kv_heads: int = get_n_kv_heads(self.model)
+
+        self._arch_desc = ModelArchRegistry.detect(self.model)
 
     # ------------------------------------------------------------------
     # Collection
@@ -117,25 +122,17 @@ class KVCollector:
         """
         Run the model on text and collect KV tensors per layer.
 
-        Processes one layer at a time to avoid accumulating all layers
-        simultaneously.
-
-        Parameters
-        ----------
-        text         : calibration text
-        layer_indices: which layers to collect (default: all)
-        max_tokens   : truncate input to this many tokens
-
         Returns
         -------
-        dict mapping "layer_{i}" → {"keys": Tensor(N_heads*T, head_dim),
-                                     "values": Tensor(N_heads*T, head_dim)}
-        where N_heads*T = number of (head, token) pairs collected.
+        dict mapping "layer_{i}" → {"keys":   Tensor(n_kv_heads*seq, head_dim),
+                                     "values": Tensor(n_kv_heads*seq, head_dim)}
         """
         if layer_indices is None:
             layer_indices = list(range(self.n_layers))
 
-        tokens = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=max_tokens)
+        tokens = self.tokenizer(
+            text, return_tensors="pt", truncation=True, max_length=max_tokens
+        )
         input_ids = tokens["input_ids"].to(self.device)
 
         results: Dict[str, Dict[str, torch.Tensor]] = {}
@@ -144,25 +141,30 @@ class KVCollector:
             keys_buf: List[torch.Tensor] = []
             vals_buf: List[torch.Tensor] = []
 
-            hook_handle = self._register_hook(layer_idx, keys_buf, vals_buf)
+            handles = self._register_hook(layer_idx, keys_buf, vals_buf)
             try:
                 with torch.no_grad():
                     self.model(input_ids)
             finally:
-                hook_handle.remove()
+                for h in handles:
+                    h.remove()
 
-            if not keys_buf:
+            if not keys_buf or not vals_buf:
                 continue
 
-            # Stack and reshape: (1, n_heads, seq_len, head_dim) → (n_heads*seq_len, head_dim)
-            k = keys_buf[0].squeeze(0)   # (n_heads, seq_len, head_dim)
-            v = vals_buf[0].squeeze(0)
+            k = keys_buf[0]   # (batch, n_kv_heads, seq, head_dim)
+            v = vals_buf[0]
 
-            n_heads, seq_len, head_dim = k.shape
+            if k.ndim == 3:
+                k = k.unsqueeze(0)
+            if v.ndim == 3:
+                v = v.unsqueeze(0)
+
+            _, n_kv_heads, seq_len, head_dim = k.shape
             self.original_head_dim = head_dim
 
-            k_flat = k.reshape(-1, head_dim).cpu().float()   # (n_heads*seq_len, head_dim)
-            v_flat = v.reshape(-1, head_dim).cpu().float()
+            k_flat = k.squeeze(0).reshape(-1, head_dim).cpu().float()
+            v_flat = v.squeeze(0).reshape(-1, head_dim).cpu().float()
 
             if self.pad_dim:
                 k_flat = pad_to_multiple_of_3(k_flat)
@@ -171,14 +173,13 @@ class KVCollector:
 
             results[f"layer_{layer_idx}"] = {"keys": k_flat, "values": v_flat}
 
-            # Free hook buffers before next layer
             del keys_buf, vals_buf
             gc.collect()
 
         return results
 
     # ------------------------------------------------------------------
-    # Internal
+    # Hook registration
     # ------------------------------------------------------------------
 
     def _register_hook(
@@ -186,87 +187,81 @@ class KVCollector:
         layer_idx: int,
         keys_buf: List[torch.Tensor],
         vals_buf: List[torch.Tensor],
-    ):
+    ) -> List:
         """
-        Register a forward hook to capture key and value tensors.
+        Register forward hook(s) and return a list of handles to remove later.
 
-        Transformers 5.x changed GPT-2 to no longer expose (key, value) in
-        the attention output tuple.  We instead hook the QKV projection layer
-        (c_attn for GPT-2) and split out K and V ourselves.  For models that
-        do expose KV in the attention output, we fall back to scanning the
-        output for 4-D tensors.
+        Routing:
+          qkv_proj    — single combined QKV projection (GPT-2, Falcon)
+          kv_separate — separate k_proj and v_proj sub-modules (LLaMA family)
+          generic     — hook the whole attention block, scan for 4-D tensors
         """
-        hook_module, hook_mode = self._get_hook_target(layer_idx)
+        desc = self._arch_desc
+        mode = desc.hook_mode
 
-        if hook_mode == "qkv_proj":
-            # c_attn / q_kvproj outputs (batch, seq, 3*embed_dim) or (batch, seq, embed_dim)
-            # We reconstruct K and V then reshape to (batch, n_heads, seq, head_dim).
-            n_heads = self.model.config.n_head if hasattr(self.model.config, "n_head") else self.model.config.num_attention_heads
+        if mode == "qkv_proj":
+            module = desc.get_attn_module(self.model, layer_idx)
+            cfg = self.model.config
 
-            def hook(module, inputs, outputs):
-                out = outputs if isinstance(outputs, torch.Tensor) else outputs[0]
-                embed_dim = out.shape[-1] // 3
-                _, k, v = out.split(embed_dim, dim=-1)      # each (batch, seq, embed_dim)
-                head_dim = embed_dim // n_heads
-                b, s, _ = k.shape
-                k = k.view(b, s, n_heads, head_dim).transpose(1, 2)  # (b, n_heads, s, head_dim)
-                v = v.view(b, s, n_heads, head_dim).transpose(1, 2)
+            def hook_qkv(mod, inputs, outputs):
+                k, v = desc.split_kv(outputs, self.model, cfg)
                 keys_buf.append(k.detach())
                 vals_buf.append(v.detach())
 
+            return [module.register_forward_hook(hook_qkv)]
+
+        elif mode == "kv_separate":
+            attn_module = desc.get_attn_module(self.model, layer_idx)
+            cfg = self.model.config
+            n_kv = self.n_kv_heads
+            head_dim = cfg.hidden_size // cfg.num_attention_heads
+
+            # Hook k_proj and v_proj directly inside the attention module
+            if not hasattr(attn_module, "k_proj") or not hasattr(attn_module, "v_proj"):
+                # Fallback to generic if sub-modules not found
+                return self._register_generic_hook(attn_module, keys_buf, vals_buf)
+
+            def hook_k(mod, inputs, output):
+                b, s, _ = output.shape
+                k = output.view(b, s, n_kv, head_dim).transpose(1, 2)
+                keys_buf.append(k.detach())
+
+            def hook_v(mod, inputs, output):
+                b, s, _ = output.shape
+                v = output.view(b, s, n_kv, head_dim).transpose(1, 2)
+                vals_buf.append(v.detach())
+
+            return [
+                attn_module.k_proj.register_forward_hook(hook_k),
+                attn_module.v_proj.register_forward_hook(hook_v),
+            ]
+
         else:
-            # Generic: scan output tuple for 4-D tensors (batch, heads, seq, head_dim)
-            def hook(module, inputs, outputs):
-                items = outputs if isinstance(outputs, (list, tuple)) else [outputs]
-                for item in items:
-                    if isinstance(item, torch.Tensor) and item.ndim == 4:
-                        if not keys_buf:
-                            keys_buf.append(item.detach())
-                        elif not vals_buf:
-                            vals_buf.append(item.detach())
-                        if keys_buf and vals_buf:
-                            return
-                    elif isinstance(item, (list, tuple)):
-                        for subitem in item:
-                            if isinstance(subitem, torch.Tensor) and subitem.ndim == 4:
-                                if not keys_buf:
-                                    keys_buf.append(subitem.detach())
-                                elif not vals_buf:
-                                    vals_buf.append(subitem.detach())
-                                if keys_buf and vals_buf:
-                                    return
+            attn_module = desc.get_attn_module(self.model, layer_idx)
+            return self._register_generic_hook(attn_module, keys_buf, vals_buf)
 
-        return hook_module.register_forward_hook(hook)
+    def _register_generic_hook(
+        self,
+        module: torch.nn.Module,
+        keys_buf: List[torch.Tensor],
+        vals_buf: List[torch.Tensor],
+    ) -> List:
+        """Scan the output tuple for 4-D (b, heads, seq, head_dim) tensors."""
+        def hook(mod, inputs, outputs):
+            items = outputs if isinstance(outputs, (list, tuple)) else [outputs]
+            for item in items:
+                if isinstance(item, torch.Tensor) and item.ndim == 4:
+                    if not keys_buf:
+                        keys_buf.append(item.detach())
+                    elif not vals_buf:
+                        vals_buf.append(item.detach())
+                    if keys_buf and vals_buf:
+                        return
 
-    def _get_hook_target(self, layer_idx: int) -> Tuple[torch.nn.Module, str]:
-        """
-        Return (module_to_hook, mode) where mode is 'qkv_proj' or 'generic'.
-
-        'qkv_proj' mode: hook the linear QKV projection and split K/V from it.
-        'generic' mode:  hook the attention block and scan output for 4-D tensors.
-        """
-        model = self.model
-
-        # GPT-2 style: combined QKV Conv1D layer
-        if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-            c_attn = model.transformer.h[layer_idx].attn.c_attn
-            return c_attn, "qkv_proj"
-
-        # OPT style
-        if hasattr(model, "model") and hasattr(model.model, "decoder"):
-            return model.model.decoder.layers[layer_idx].self_attn, "generic"
-
-        # LLaMA / Mistral style
-        if hasattr(model, "model") and hasattr(model.model, "layers"):
-            return model.model.layers[layer_idx].self_attn, "generic"
-
-        raise NotImplementedError(
-            f"Cannot locate attention module for layer {layer_idx} in {self.model_name}. "
-            "Add support in KVCollector._get_hook_target()."
-        )
+        return [module.register_forward_hook(hook)]
 
     def __repr__(self) -> str:
         return (
-            f"KVCollector(model={self.model_name!r}, "
-            f"n_layers={self.n_layers}, device={self.device!r})"
+            f"KVCollector(model={self.model_name!r}, arch={self._arch_desc.arch.value!r}, "
+            f"n_layers={self.n_layers}, n_kv_heads={self.n_kv_heads}, device={self.device!r})"
         )
