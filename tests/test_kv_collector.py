@@ -194,55 +194,107 @@ class TestKVCollectorIntegration:
         # Padded dims should be zero
         assert (keys[:, 64:] == 0).all()
 
+    # ------------------------------------------------------------------
+    # Class-level KV collection shared across all multi-layer tests
+    # (GPT-2 forward pass is fast; collect once per test class)
+    # ------------------------------------------------------------------
+
+    _all_layer_keys: dict = {}   # populated by setup_class
+
+    @classmethod
+    def setup_class(cls):
+        """Collect all 12 GPT-2 layers once; store in cls._all_layer_keys."""
+        from prismkv.eval.kv_collector import KVCollector
+
+        text = "The quick brown fox jumps over the lazy dog. " * 100  # ~1200 tokens
+        collector = KVCollector("gpt2", device="cpu", pad_dim=True)
+        layer_indices = list(range(12))
+        collected = collector.collect(text, layer_indices=layer_indices)
+        cls._all_layer_keys = {
+            l: collected[f"layer_{l}"]["keys"]
+            for l in layer_indices
+        }
+
     def test_gpt2_benchmark_all_layers(self):
         """
-        Full benchmark on real GPT-2 KV distributions.
-        Learned scheme should be ≥5% better than uniform on key vectors.
+        Full benchmark on real GPT-2 KV distributions across all 12 layers.
+        Learned scheme should be ≤95% RMSE of uniform on ≥10/12 layers.
         """
         import tempfile
         from pathlib import Path
-        from prismkv.eval.kv_collector import KVCollector
         from prismkv.eval.benchmark import run_benchmark, print_table
         from prismkv.quantizer.learned_codebook import LearnedSliceCodebook
         from prismkv import StackedPlaneQuantizer
 
-        short_text = (
-            "The quick brown fox jumps over the lazy dog. " * 50
-        )  # ~600 tokens, fast
+        all_keys = self._all_layer_keys
+        assert len(all_keys) == 12, "Expected keys for all 12 GPT-2 layers"
 
-        collector = KVCollector("gpt2", device="cpu", pad_dim=True)
-        results_collected = collector.collect(short_text, layer_indices=[0])
-        keys = results_collected["layer_0"]["keys"]    # (N, 66)
+        layers_learned_wins = 0
+        layer_rmse_uniform = []
+        layer_rmse_learned = []
 
-        # Train a codebook on collected keys
-        dim = keys.shape[1]   # 66
-        q = StackedPlaneQuantizer(dim=dim, bits_z=4, bits_r=4, bits_theta=4, seed=42)
-        q.calibrate(keys)
-        rotated = keys @ q.R.T
-        K = 2 ** (q.bits_r + q.bits_theta)
-        cb = LearnedSliceCodebook.train(
-            rotated_vectors=rotated,
-            z_idx=q.z_idx, x_idx=q.x_idx, y_idx=q.y_idx,
-            z_min=q.z_min, z_max=q.z_max, r_max=q.r_max,
-            bins_z=q.bins_z, K=K, max_iter=30, seed=0,
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            cb_path = Path(tmp) / "gpt2_cb.npz"
-            cb.save(cb_path)
-
-            bench_results = run_benchmark(
-                keys, bits=4, codebook_path=str(cb_path), original_dim=64
+        for layer_idx, keys in all_keys.items():
+            dim = keys.shape[1]  # 66 (padded)
+            q = StackedPlaneQuantizer(dim=dim, bits_z=4, bits_r=4, bits_theta=4, seed=42)
+            q.calibrate(keys)
+            rotated = keys @ q.R.T
+            K = 2 ** (q.bits_r + q.bits_theta)
+            cb = LearnedSliceCodebook.train(
+                rotated_vectors=rotated,
+                z_idx=q.z_idx, x_idx=q.x_idx, y_idx=q.y_idx,
+                z_min=q.z_min, z_max=q.z_max, r_max=q.r_max,
+                bins_z=q.bins_z, K=K, max_iter=30, seed=0,
             )
 
-        print_table(bench_results, title="GPT-2 layer 0 keys benchmark")
+            with tempfile.TemporaryDirectory() as tmp:
+                cb_path = Path(tmp) / f"gpt2_cb_layer{layer_idx}.npz"
+                cb.save(cb_path)
+                bench_results = run_benchmark(
+                    keys, bits=4, codebook_path=str(cb_path), original_dim=64
+                )
 
-        # Find results by name
-        r_uniform = next(r for r in bench_results if "uniform" in r.name and "3D" in r.name)
-        r_learned = next(r for r in bench_results if "learned" in r.name)
+            r_uniform = next(r for r in bench_results if "uniform" in r.name and "3D" in r.name)
+            r_learned = next(r for r in bench_results if "learned" in r.name)
+            layer_rmse_uniform.append(r_uniform.rmse)
+            layer_rmse_learned.append(r_learned.rmse)
 
-        ratio = r_learned.rmse / r_uniform.rmse
-        assert ratio <= 0.95, (
-            f"Learned RMSE ({r_learned.rmse:.6f}) should be ≤95% of uniform "
-            f"({r_uniform.rmse:.6f}) on real GPT-2 KV keys, ratio={ratio:.3f}"
+            ratio = r_learned.rmse / r_uniform.rmse
+            if ratio <= 0.95:
+                layers_learned_wins += 1
+
+        # Per-layer heterogeneity: RMSE should vary across layers
+        rmse_tensor = torch.tensor(layer_rmse_uniform)
+        rmse_std = rmse_tensor.std().item()
+        assert rmse_std > 0, "Per-layer RMSE should vary across GPT-2 layers"
+
+        # Learned codebook wins on ≥10/12 layers
+        assert layers_learned_wins >= 10, (
+            f"Learned codebook should outperform uniform on ≥10/12 layers, "
+            f"only won on {layers_learned_wins}/12"
         )
+
+    def test_gpt2_per_layer_entropy_range(self):
+        """
+        Per-head attention entropy should span a meaningful range across layers,
+        demonstrating that GPT-2 has heterogeneous attention patterns.
+        """
+        from prismkv.eval.attention_entropy import collect_attention_entropy
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        model = AutoModelForCausalLM.from_pretrained("gpt2", attn_implementation="eager")
+        model.eval()
+
+        text = "The quick brown fox jumps over the lazy dog. " * 20
+        entropy = collect_attention_entropy(model, text, tokenizer, device="cpu")
+
+        assert entropy.shape == (12, 12), \
+            f"Expected (12 layers, 12 heads) entropy, got {entropy.shape}"
+
+        # Entropy values should be positive
+        assert (entropy > 0).all(), "All entropy values should be positive"
+
+        # There should be meaningful range in entropy (heterogeneous heads)
+        entropy_range = entropy.max().item() - entropy.min().item()
+        assert entropy_range > 0.5, \
+            f"Entropy range {entropy_range:.3f} too small — expected heterogeneous heads"

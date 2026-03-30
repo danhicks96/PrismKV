@@ -1,0 +1,280 @@
+{
+  "model": "gpt2",
+  "bits": 4,
+  "timestamp": "2026-03-30T17:30:54Z",
+  "per_layer_benchmark": {
+    "layer_0": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.2148834466934204,
+        "cosine_sim_mean": 0.9878618717193604,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.2814895212650299,
+        "cosine_sim_mean": 0.9737935066223145,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.5623448491096497,
+        "cosine_sim_mean": 0.8913891315460205,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_1": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.19252271950244904,
+        "cosine_sim_mean": 0.9867839217185974,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.23780576884746552,
+        "cosine_sim_mean": 0.9759783148765564,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.5567725896835327,
+        "cosine_sim_mean": 0.8708837628364563,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_2": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.4975720942020416,
+        "cosine_sim_mean": 0.9871106147766113,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.4956322908401489,
+        "cosine_sim_mean": 0.9730258584022522,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.6435850262641907,
+        "cosine_sim_mean": 0.9498679041862488,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_3": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.8396478295326233,
+        "cosine_sim_mean": 0.9805505871772766,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.6461610794067383,
+        "cosine_sim_mean": 0.9715664982795715,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.6837733387947083,
+        "cosine_sim_mean": 0.9653959274291992,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_4": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.6851795315742493,
+        "cosine_sim_mean": 0.9856700301170349,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.8200368881225586,
+        "cosine_sim_mean": 0.9341704845428467,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.6720698475837708,
+        "cosine_sim_mean": 0.9554478526115417,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_5": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.26028692722320557,
+        "cosine_sim_mean": 0.9906823635101318,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.3131975829601288,
+        "cosine_sim_mean": 0.984867513179779,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.6172155737876892,
+        "cosine_sim_mean": 0.9394180178642273,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_6": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.25321778655052185,
+        "cosine_sim_mean": 0.9905600547790527,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.29604372382164,
+        "cosine_sim_mean": 0.9853777289390564,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.6108388304710388,
+        "cosine_sim_mean": 0.9357121586799622,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_7": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.24717998504638672,
+        "cosine_sim_mean": 0.9906798005104065,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.3324969410896301,
+        "cosine_sim_mean": 0.9812850952148438,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.6123933792114258,
+        "cosine_sim_mean": 0.9364473819732666,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_8": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.23711353540420532,
+        "cosine_sim_mean": 0.9905789494514465,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.2730984389781952,
+        "cosine_sim_mean": 0.9868599772453308,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.6119864583015442,
+        "cosine_sim_mean": 0.9335494637489319,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_9": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.21599481999874115,
+        "cosine_sim_mean": 0.9900938868522644,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.25302377343177795,
+        "cosine_sim_mean": 0.9859411716461182,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.5966476798057556,
+        "cosine_sim_mean": 0.9223578572273254,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_10": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.20838893949985504,
+        "cosine_sim_mean": 0.9897851943969727,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.2484314888715744,
+        "cosine_sim_mean": 0.9849910736083984,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.5982020497322083,
+        "cosine_sim_mean": 0.914534866809845,
+        "bits_per_dim": 4.0
+      }
+    ],
+    "layer_11": [
+      {
+        "name": "2D Polar (uniform)",
+        "rmse": 0.18520309031009674,
+        "cosine_sim_mean": 0.9887725710868835,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (uniform)",
+        "rmse": 0.20817048847675323,
+        "cosine_sim_mean": 0.9856128692626953,
+        "bits_per_dim": 4.0
+      },
+      {
+        "name": "3D Stacked-Plane (learned)",
+        "rmse": 0.5770556926727295,
+        "cosine_sim_mean": 0.8923144340515137,
+        "bits_per_dim": 4.0
+      }
+    ]
+  },
+  "adaptive_allocation": {
+    "target_bits": 4,
+    "mean_bits_actual": 4.0,
+    "target_delta": 0.0,
+    "layer0_config": {
+      "bits_z": 2,
+      "bits_r": 3,
+      "bits_theta": 4
+    },
+    "layer0_rmse": 0.9023441672325134,
+    "passes": true
+  },
+  "bias_correction": {
+    "mae_before": 0.22530104219913483,
+    "mae_after": 0.22121089696884155,
+    "max_abs_bias_per_dim": 0.016092808917164803,
+    "passes": true
+  },
+  "pseudo_perplexity": {
+    "fp16_nats": 4.123396037523413,
+    "prismkv_4bit_nats": 4.884912457967562,
+    "delta_nats": 0.7615164204441482,
+    "passes": true
+  },
+  "elapsed_seconds": 20.4,
+  "summary": {
+    "all_checks_pass": true,
+    "checks": {
+      "adaptive_allocation": true,
+      "bias_correction": true,
+      "pseudo_perplexity": true
+    }
+  }
+}
