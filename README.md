@@ -5,7 +5,7 @@
 **First published:** 2026-03-30
 **Author:** Dan Hicks · [github.com/danhicks96](https://github.com/danhicks96)
 **License:** Apache-2.0
-**Version:** 1.4.0
+**Version:** 1.4.1
 **Status:** Defensive prior-art publication. All ideas herein are released under Apache-2.0.
 
 ---
@@ -217,7 +217,7 @@ pip install -e ".[dev,eval,cache,rag]"
 pytest tests/ -v
 ```
 
-306 tests across all modules (169 core, 137 eval+cache+RAG+validation).
+328 tests across all modules (169 core, 159 eval+cache+RAG+validation).
 
 ---
 
@@ -257,7 +257,7 @@ PrismKV/
 │       ├── adapters.py           — TextAdapter, DictAdapter, FileAdapter, APIAdapter
 │       └── schema.py             — Chunk, Node, RetrievalResult
 ├── src/prismkv/sidecar.py            — HTTP compression service (M12)
-├── tests/                        — 306 tests across all modules
+├── tests/                        — 328 tests across all modules
 ├── examples/
 │   ├── demo.py                   — 2-D vs 3-D quantizer comparison
 │   ├── hf_integration.py         — GPT-2 with PrismKVCache

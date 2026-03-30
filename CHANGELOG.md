@@ -4,6 +4,32 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [1.4.1] — 2026-03-30
+
+### Performance
+- **RAG batch ingestion** — `VectorStore.add_batch()` inserts N chunks in a single
+  SQLite transaction with one pre-check `SELECT` for duplicates (cross-batch and
+  within-batch); `_dirty` set once per batch instead of N times
+- **`GraphIndex.add_batch()`** — collects all new edges across the whole batch and
+  writes with a single `executemany` (was one transaction per chunk)
+- **`IngestionEngine.ingest(batch_size=500)`** — default 500-chunk batches; passes
+  only newly-inserted chunks to the graph (skips duplicate re-processing)
+- **`RAGEngine.ingest(batch_size=500)`** — exposes `batch_size` at the public API
+
+### Added
+- **`ChatGPTExportAdapter`** (`prismkv.rag.adapters`) — parses ChatGPT export JSON
+  (list of conversations with mapping/BFS message nodes) and yields one `Chunk` per
+  (user, assistant) turn pair.  Enables `engine.ingest(ChatGPTExportAdapter(path),
+  batch_size=500)` for full per-file batching (vs. one `ingest()` call per turn pair)
+- 22 new tests: `TestVectorStoreBatch` (6), `TestGraphIndexBatch` (4),
+  `TestIngestionEngineBatch` (3), `TestChatGPTExportAdapter` (9)
+
+### Expected impact
+- 58k-chunk ChatGPT export corpus: ~2 hours → ~10-15 minutes (issue #21)
+- SQLite transactions: 58,000 → ~117 at `batch_size=500`
+
+---
+
 ## [1.4.0] — 2026-03-30
 
 ### Added
