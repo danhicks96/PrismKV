@@ -4,6 +4,21 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [0.7.0] — 2026-03-30
+
+### Added
+- **M8 Multi-model support**: `ModelArchRegistry` — extensible architecture registry
+  with built-in support for GPT-2, OPT, LLaMA/Mistral/Gemma/CodeLlama, Falcon, Qwen2, Phi
+- `ArchDescriptor` — per-arch hook mode, module locator, KV split function, and aliases list
+- **GQA support**: `get_n_kv_heads()` reads `num_key_value_heads` from config for
+  Grouped Query Attention models (LLaMA-2-70B, Mistral-7B, …)
+- `KVCollector` now uses `ModelArchRegistry.detect()` for automatic hook routing;
+  new `kv_separate` mode hooks `k_proj`/`v_proj` sub-modules directly for LLaMA family
+- `ModelArchRegistry.register()` — runtime registration of custom architectures
+- 18 new tests in `test_model_arch.py`
+
+---
+
 ## [0.6.0] — 2026-03-30
 
 ### Added
