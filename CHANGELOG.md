@@ -4,7 +4,7 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
-## [Unreleased]
+## [1.1.1] — 2026-03-30
 
 ### Added
 - Real GPT-2 benchmark results committed to `results/` — 73,728 KV vectors
@@ -14,6 +14,10 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 - `results/benchmark_gpt2.json` — raw benchmark numbers
 - `results/benchmark_gpt2_notes.md` — methodology and interpretation
 - README **Benchmark Results** table with actual measured numbers
+
+### Fixed
+- README test count corrected: 131 → 234 (126 core, 108 eval+cache+RAG)
+- `prismkv.__version__` now matches `pyproject.toml` (was stale at `0.6.0`)
 
 ---
 
