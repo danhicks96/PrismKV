@@ -4,6 +4,20 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [0.9.0] — 2026-03-30
+
+### Added
+- **M10 Persistence + APIAdapter**
+- `save_cache(cache, path)` — serialize compressed int16 codes to .npz (numpy compressed)
+- `load_cache(path, device)` — deserialize codes, reconstruct FP tensors, seed parent DynamicCache
+- `APIAdapter` — REST endpoint ingestion adapter; supports GET/POST, `text_field` extraction
+  for list-of-dicts responses, recursive JSON leaf extraction, base metadata propagation
+- `prismkv.cache` now exports `save_cache`, `load_cache`
+- `prismkv.rag` now exports `APIAdapter`
+- 13 new tests in `test_m10_persistence.py`
+
+---
+
 ## [0.8.0] — 2026-03-30
 
 ### Added
