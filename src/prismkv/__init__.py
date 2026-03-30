@@ -14,6 +14,7 @@ Repo:   https://github.com/danhicks96/PrismKV
 
 from prismkv.quantizer.baseline_2d import PolarQuantizer2D
 from prismkv.quantizer.stacked_plane import StackedPlaneQuantizer
+from prismkv.quantizer.learned_codebook import LearnedSliceCodebook
 
-__all__ = ["PolarQuantizer2D", "StackedPlaneQuantizer"]
-__version__ = "0.1.0"
+__all__ = ["PolarQuantizer2D", "StackedPlaneQuantizer", "LearnedSliceCodebook"]
+__version__ = "0.2.0"

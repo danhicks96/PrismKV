@@ -24,9 +24,13 @@ First published: 2026-03-30
 """
 
 import math
+from pathlib import Path
+from typing import Optional
+
 import torch
 
 from prismkv.utils import make_rotation
+from prismkv.quantizer.learned_codebook import LearnedSliceCodebook
 
 
 class StackedPlaneQuantizer:
@@ -92,6 +96,9 @@ class StackedPlaneQuantizer:
         self.z_max = z_max if z_max is not None else conservative
         self.r_max = r_max if r_max is not None else conservative
 
+        # Learned codebooks (None = use uniform polar fallback)
+        self._codebooks: Optional[LearnedSliceCodebook] = None
+
     # ------------------------------------------------------------------
     # Optional calibration
     # ------------------------------------------------------------------
@@ -119,6 +126,33 @@ class StackedPlaneQuantizer:
         self.r_max = radii.max().item()
 
     # ------------------------------------------------------------------
+    # Learned codebook loading
+    # ------------------------------------------------------------------
+
+    def load_codebooks(self, path: str | Path) -> None:
+        """
+        Load a trained LearnedSliceCodebook from a .npz file.
+
+        After loading, encode() and decode() will use the learned per-z-slice
+        centroids instead of the uniform polar fallback.  Call with path=None
+        to revert to the uniform path.
+
+        Parameters
+        ----------
+        path : str | Path  — path to the .npz file produced by
+                             LearnedSliceCodebook.save() or build_codebooks.py
+        """
+        if path is None:
+            self._codebooks = None
+            return
+        cb = LearnedSliceCodebook.load(path)
+        # Sync quantization ranges from the saved file so encoder/decoder agree
+        self.z_min = cb.z_min
+        self.z_max = cb.z_max
+        self.r_max = cb.r_max
+        self._codebooks = cb
+
+    # ------------------------------------------------------------------
     # Encode
     # ------------------------------------------------------------------
 
@@ -133,8 +167,10 @@ class StackedPlaneQuantizer:
         Returns
         -------
         codes : Tensor shape (N, m) dtype int64
-            Each code packs (i_z, i_r, i_theta):
-            code = (i_z << (bits_r + bits_theta)) | (i_r << bits_theta) | i_theta
+            Lower (bits_r + bits_theta) bits: centroid index (learned) or
+            (i_r << bits_theta | i_theta) (uniform).
+            Upper bits_z bits: i_z.
+            code = (i_z << (bits_r + bits_theta)) | i_flat
         """
         rotated = vectors @ self.R.T                          # (N, dim)
 
@@ -148,18 +184,25 @@ class StackedPlaneQuantizer:
         i_z = ((z - self.z_min) / delta_z).floor().long()
         i_z = i_z.clamp(0, self.bins_z - 1)                  # (N, m)
 
-        # --- Quantize (x, y) in polar form ---
-        r = torch.sqrt(x ** 2 + y ** 2).clamp(0.0, self.r_max)
-        theta = torch.atan2(y, x)                             # range (-pi, pi]
+        if self._codebooks is not None:
+            # --- Learned path: nearest centroid per z-slice ---
+            xy = torch.stack([x, y], dim=-1)                  # (N, m, 2)
+            i_flat = self._codebooks.encode_xy(xy, i_z)       # (N, m) long
+        else:
+            # --- Uniform polar fallback (v1 behaviour) ---
+            r = torch.sqrt(x ** 2 + y ** 2).clamp(0.0, self.r_max)
+            theta = torch.atan2(y, x)                         # range (-pi, pi]
 
-        i_r = (r / self.r_max * (self.bins_r - 1)).round().long()
-        i_r = i_r.clamp(0, self.bins_r - 1)
+            i_r = (r / self.r_max * (self.bins_r - 1)).round().long()
+            i_r = i_r.clamp(0, self.bins_r - 1)
 
-        i_theta = ((theta + math.pi) / (2 * math.pi) * (self.bins_theta - 1)).round().long()
-        i_theta = i_theta.clamp(0, self.bins_theta - 1)
+            i_theta = ((theta + math.pi) / (2 * math.pi) * (self.bins_theta - 1)).round().long()
+            i_theta = i_theta.clamp(0, self.bins_theta - 1)
+
+            i_flat = (i_r << self.bits_theta) | i_theta       # (N, m)
 
         # --- Pack into one int64 per group ---
-        codes = (i_z << (self.bits_r + self.bits_theta)) | (i_r << self.bits_theta) | i_theta
+        codes = (i_z << (self.bits_r + self.bits_theta)) | i_flat
         return codes  # (N, m), int64
 
     # ------------------------------------------------------------------
@@ -178,27 +221,36 @@ class StackedPlaneQuantizer:
         -------
         vectors : Tensor shape (N, dim)
         """
-        mask_theta = (1 << self.bits_theta) - 1
-        mask_r = (1 << self.bits_r) - 1
+        bits_flat = self.bits_r + self.bits_theta
+        mask_flat = (1 << bits_flat) - 1
 
-        i_theta = (codes & mask_theta).float()                # (N, m)
-        i_r = ((codes >> self.bits_theta) & mask_r).float()
-        i_z = (codes >> (self.bits_r + self.bits_theta)).float()
+        i_flat = codes & mask_flat                            # (N, m) long
+        i_z = (codes >> bits_flat).long()                    # (N, m) long
 
         # --- Recover z using bin-center convention (minimises bias) ---
         delta_z = (self.z_max - self.z_min) / self.bins_z
-        z_q = self.z_min + (i_z + 0.5) * delta_z             # (N, m)
+        z_q = self.z_min + (i_z.float() + 0.5) * delta_z    # (N, m)
 
-        # --- Recover (x, y) from polar ---
-        r_q = i_r / (self.bins_r - 1) * self.r_max
-        theta_q = i_theta / (self.bins_theta - 1) * 2 * math.pi - math.pi
+        if self._codebooks is not None:
+            # --- Learned path: centroid table lookup; no cos/sin needed ---
+            x_q, y_q = self._codebooks.decode_xy(i_flat, i_z)
+        else:
+            # --- Uniform polar fallback (v1 behaviour) ---
+            mask_theta = (1 << self.bits_theta) - 1
+            mask_r = (1 << self.bits_r) - 1
 
-        x_q = r_q * torch.cos(theta_q)                       # (N, m)
-        y_q = r_q * torch.sin(theta_q)
+            i_theta = (i_flat & mask_theta).float()
+            i_r = ((i_flat >> self.bits_theta) & mask_r).float()
+
+            r_q = i_r / (self.bins_r - 1) * self.r_max
+            theta_q = i_theta / (self.bins_theta - 1) * 2 * math.pi - math.pi
+
+            x_q = r_q * torch.cos(theta_q)                   # (N, m)
+            y_q = r_q * torch.sin(theta_q)
 
         # --- Scatter back into a (N, dim) rotated tensor ---
         N = codes.shape[0]
-        rotated_q = torch.zeros(N, self.dim, dtype=codes.float().dtype)
+        rotated_q = torch.zeros(N, self.dim, dtype=x_q.dtype)
         rotated_q[:, self.z_idx] = z_q
         rotated_q[:, self.x_idx] = x_q
         rotated_q[:, self.y_idx] = y_q
