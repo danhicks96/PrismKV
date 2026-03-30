@@ -305,6 +305,7 @@ PrismKV/
 | M13 | 1.3.0 | Optimal calibration — Lloyd-Max z quantizer (58.3% z-MSE reduction), percentile-clip range, bit-split optimizer |
 | M14 | 1.4.0 | Comprehensive validation — all 12 GPT-2 layers, pseudo-ppl CI gate, adaptive allocation E2E |
 | M15 | 1.2.0 | CUDA kernel prior art — fused dequantize + polar attention; llama.cpp C++ integration structs |
+| v1.4.1 | 1.4.1 | RAG batch ingestion perf (~10× speedup) — `VectorStore.add_batch()`, `ChatGPTExportAdapter` |
 
 ### CUDA Kernel (implemented, requires CUDA to compile)
 
@@ -344,6 +345,25 @@ response = engine.generate("What happened at the throne room?", generation_fn=my
 ```
 
 Hybrid retrieval: cosine vector search + NetworkX graph BFS expansion. SHA-256 content deduplication. Token-budget-aware context assembly.
+
+### Batch Ingestion (v1.4.1)
+
+Pass `batch_size` to `ingest()` for ~10× throughput vs the per-chunk default — a single SQLite transaction per batch instead of one per chunk:
+
+```python
+# ~228 chunks/s on CPU (vs ~20 chunks/s single-insert)
+engine.ingest(adapter, batch_size=500)
+```
+
+**ChatGPT export support** — parse a ChatGPT `conversations.json` export into one chunk per (user, assistant) turn pair:
+
+```python
+from prismkv.rag import RAGEngine, ChatGPTExportAdapter
+
+engine = RAGEngine(db_path="rag.db", embedder=my_embed_fn)
+engine.ingest(ChatGPTExportAdapter("chatgpt_export.json"), batch_size=500)
+# 30,044 turns from 1,746 conversations in ~132 s on CPU
+```
 
 ## Adaptive Bit Allocation (M7)
 
