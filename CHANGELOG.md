@@ -4,6 +4,19 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [Unreleased]
+
+### Added
+- Real GPT-2 benchmark results committed to `results/` — 73,728 KV vectors
+  (12 layers × 12 heads × 512 tokens); validates learned codebook improvement
+  (21.4% RMSE reduction over 3D uniform, ≥5% target) and memory compression
+  claims on real data
+- `results/benchmark_gpt2.json` — raw benchmark numbers
+- `results/benchmark_gpt2_notes.md` — methodology and interpretation
+- README **Benchmark Results** table with actual measured numbers
+
+---
+
 ## [1.1.0] — 2026-03-30
 
 ### Added
