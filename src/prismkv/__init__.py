@@ -17,7 +17,7 @@ from prismkv.quantizer.stacked_plane import StackedPlaneQuantizer
 from prismkv.quantizer.learned_codebook import LearnedSliceCodebook
 
 __all__ = ["PolarQuantizer2D", "StackedPlaneQuantizer", "LearnedSliceCodebook"]
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # Cache classes available when transformers is installed
 try:

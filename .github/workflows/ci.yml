@@ -103,4 +103,24 @@ jobs:
             tests/test_m10_persistence.py \
             tests/test_model_arch.py \
             tests/test_e2e_benchmark.py \
+            tests/test_real_data_validation.py \
             -v --tb=short
+
+      - name: Pseudo-perplexity quality gate
+        timeout-minutes: 5
+        run: |
+          python -c "
+          # NOTE: measure_pseudo_perplexity uses a fresh PrismKVCache per token prediction.
+          # This means the quantizer calibrates on very few vectors for early tokens
+          # (prefix length = token index), inflating the delta vs a warm-up scenario.
+          # Threshold is 1.5 nats/token — a 'no catastrophic failure' gate rather than
+          # a tight quality bar. Typical well-calibrated delta is ~0.2 nats at 4 bits/dim.
+          from prismkv.eval.e2e_benchmark import measure_pseudo_perplexity
+          scores = measure_pseudo_perplexity(model_name='gpt2', n_tokens=64, bits_configs=[4])
+          fp16 = scores['fp16']
+          p4 = scores['prismkv_4bit']
+          delta = p4 - fp16
+          print(f'fp16={fp16:.4f}  prismkv_4bit={p4:.4f}  delta={delta:.4f}')
+          assert delta < 1.5, f'Pseudo-perplexity delta {delta:.4f} >= 1.5 nats/token at 4 bits/dim'
+          print('PASS: perplexity delta < 1.5 nats/token')
+          "

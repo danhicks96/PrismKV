@@ -75,6 +75,7 @@ class E2EReport:
     n_layers: int
     context_lengths: List[int]
     bits_configs: List[int]
+    adaptive_result: Optional["QualityResult"] = None  # set when adaptive_allocation=True
 
 
 # ---------------------------------------------------------------------------
@@ -274,25 +275,34 @@ def run_e2e_benchmark(
     context_lengths: Optional[List[int]] = None,
     bits_configs: Optional[List[int]] = None,
     seed: int = 42,
+    adaptive_allocation: bool = False,
+    entropy: Optional[torch.Tensor] = None,
 ) -> E2EReport:
     """
     Run the full end-to-end benchmark.
 
     Parameters
     ----------
-    kv_vectors      : optional (N, head_dim) float32 real KV vectors for quality eval.
-                      If None, synthetic anisotropic Gaussians are used.
-    head_dim        : attention head dimension (default 64, GPT-2 style)
-    n_heads         : number of attention heads (default 12)
-    n_layers        : number of transformer layers (default 12)
-    n_synthetic     : number of synthetic vectors to generate if kv_vectors is None
-    context_lengths : token counts for memory table (default [1024, 4096, 16384])
-    bits_configs    : bit budgets (default [3, 4, 5])
-    seed            : random seed
+    kv_vectors         : optional (N, head_dim) float32 real KV vectors for quality eval.
+                         If None, synthetic anisotropic Gaussians are used.
+    head_dim           : attention head dimension (default 64, GPT-2 style)
+    n_heads            : number of attention heads (default 12)
+    n_layers           : number of transformer layers (default 12)
+    n_synthetic        : number of synthetic vectors to generate if kv_vectors is None
+    context_lengths    : token counts for memory table (default [1024, 4096, 16384])
+    bits_configs       : bit budgets (default [3, 4, 5])
+    seed               : random seed
+    adaptive_allocation: if True, run an additional adaptive quality pass using
+                         entropy water-filling (BitAllocator).  Requires entropy
+                         to be provided or will use synthetic uniform entropy.
+    entropy            : optional (n_layers, n_heads) entropy tensor for adaptive
+                         allocation; ignored when adaptive_allocation=False.
 
     Returns
     -------
     E2EReport with memory_profiles and quality_results.
+    When adaptive_allocation=True, E2EReport.adaptive_result holds the
+    additional QualityResult for the "3D Adaptive (entropy water-fill)" scheme.
     """
     if context_lengths is None:
         context_lengths = [1024, 4096, 16384]
@@ -316,6 +326,18 @@ def run_e2e_benchmark(
 
     quality = evaluate_quality(vectors, bits_configs=bits_configs, seed=seed)
 
+    # Adaptive allocation quality pass
+    adaptive_result: Optional[QualityResult] = None
+    if adaptive_allocation:
+        adaptive_result = _evaluate_adaptive(
+            vectors=vectors,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            entropy=entropy,
+            target_bits=4,
+            seed=seed,
+        )
+
     return E2EReport(
         memory_profiles=memory,
         quality_results=quality,
@@ -324,6 +346,88 @@ def run_e2e_benchmark(
         n_layers=n_layers,
         context_lengths=context_lengths,
         bits_configs=bits_configs,
+        adaptive_result=adaptive_result,
+    )
+
+
+def _evaluate_adaptive(
+    vectors: torch.Tensor,
+    n_layers: int,
+    n_heads: int,
+    entropy: Optional[torch.Tensor],
+    target_bits: int = 4,
+    seed: int = 42,
+) -> QualityResult:
+    """
+    Evaluate reconstruction quality using entropy-driven adaptive bit allocation.
+
+    Uses BitAllocator to compute per-layer configs, then evaluates the
+    layer-averaged config on the provided vectors.
+
+    Parameters
+    ----------
+    vectors    : (N, head_dim) float32 KV vectors
+    n_layers   : model layer count
+    n_heads    : model head count
+    entropy    : (n_layers, n_heads) entropy tensor; if None, synthetic entropy used
+    target_bits: mean bits/dim target
+    seed       : random seed
+
+    Returns
+    -------
+    QualityResult with scheme="3D Adaptive (entropy water-fill)"
+    """
+    from prismkv.quantizer.bit_alloc import BitAllocator
+
+    if entropy is None:
+        # Synthetic heterogeneous entropy for testing without a model
+        torch.manual_seed(seed)
+        entropy = torch.rand(n_layers, n_heads) * 2.5 + 0.5
+
+    alloc = BitAllocator(entropy, target_avg_bits_per_dim=float(target_bits))
+    alloc.compute()
+
+    # Use the layer-averaged config from layer 0 as representative
+    layer_configs = alloc.to_prism_configs(per_head=False)
+    avg_cfg = layer_configs[0]
+
+    N, dim = vectors.shape
+    d3 = dim + (3 - dim % 3) % 3
+    v3 = torch.nn.functional.pad(vectors, (0, d3 - dim)) if d3 != dim else vectors
+
+    q = StackedPlaneQuantizer(
+        dim=d3,
+        bits_z=avg_cfg.bits_z,
+        bits_r=avg_cfg.bits_r,
+        bits_theta=avg_cfg.bits_theta,
+        seed=seed,
+    )
+    q.calibrate(v3)
+
+    import time
+    t0 = time.perf_counter()
+    codes = q.encode(v3)
+    recon = q.decode(codes)
+    elapsed = time.perf_counter() - t0
+
+    diff = vectors - recon[:, :dim]
+    rmse = diff.pow(2).mean(dim=1).sqrt().mean().item()
+    v_norm = torch.nn.functional.normalize(vectors, dim=1)
+    r_norm = torch.nn.functional.normalize(recon[:, :dim], dim=1)
+    cos_mean = (v_norm * r_norm).sum(dim=1).mean().item()
+    rel_err = (
+        diff.norm(dim=1) / vectors.norm(dim=1).clamp(min=1e-8)
+    ).mean().item()
+    tps = N / elapsed if elapsed > 0 else float("inf")
+
+    return QualityResult(
+        scheme="3D Adaptive (entropy water-fill)",
+        bits_per_dim=alloc.mean_bits_per_dim,
+        rmse=rmse,
+        cosine_sim_mean=cos_mean,
+        relative_error_mean=rel_err,
+        throughput_vps=tps,
+        n_vectors=N,
     )
 
 
