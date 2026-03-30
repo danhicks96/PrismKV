@@ -364,3 +364,103 @@ class APIAdapter(BaseAdapter):
                                                path)
             else:
                 yield path, value
+
+
+# ---------------------------------------------------------------------------
+# ChatGPTExportAdapter
+# ---------------------------------------------------------------------------
+
+class ChatGPTExportAdapter(BaseAdapter):
+    """
+    Ingest a ChatGPT conversation export JSON file.
+
+    Each (user, assistant) turn pair becomes one Chunk, preserving the title
+    and timestamp for later retrieval.  The export format is the ZIP downloaded
+    from ChatGPT's "Export Data" page — unzip it and point to any of the
+    `chatgpt_export_chunk_*.json` files (or the single `conversations.json`).
+
+    Parameters
+    ----------
+    path      : path to the ChatGPT JSON export file
+    metadata  : extra metadata applied to all chunks
+    """
+
+    def __init__(
+        self,
+        path: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.path = path
+        self._metadata = metadata or {}
+
+    def chunks(self) -> List[Chunk]:
+        import json
+        import os
+
+        with open(self.path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        result: List[Chunk] = []
+        source_name = os.path.basename(self.path)
+
+        for conv in data:
+            title = conv.get("title", "")
+            create_time = conv.get("create_time", 0)
+            mapping = conv.get("mapping", {})
+
+            # Reconstruct ordered messages via parent links (BFS)
+            nodes = {nid: node for nid, node in mapping.items()}
+            root = None
+            for nid, node in nodes.items():
+                if node.get("parent") is None or node.get("parent") not in nodes:
+                    root = nid
+                    break
+            if root is None:
+                continue
+
+            ordered = []
+            queue = [root]
+            while queue:
+                nid = queue.pop(0)
+                node = nodes.get(nid, {})
+                msg = node.get("message")
+                if msg:
+                    role = msg.get("author", {}).get("role", "")
+                    parts = msg.get("content", {}).get("parts", [])
+                    text = " ".join(p for p in parts if isinstance(p, str)).strip()
+                    if text and role in ("user", "assistant"):
+                        ordered.append((role, text))
+                queue.extend(node.get("children", []))
+
+            # Emit one chunk per (user, assistant) turn pair
+            i = 0
+            while i < len(ordered):
+                role, text = ordered[i]
+                if (role == "user"
+                        and i + 1 < len(ordered)
+                        and ordered[i + 1][0] == "assistant"):
+                    chunk_text = (
+                        f"[Conversation: {title}]\n"
+                        f"User: {text}\n"
+                        f"Assistant: {ordered[i + 1][1]}"
+                    )
+                    source_id = f"{source_name}::{title[:60]}"
+                    chunk_id = hashlib.sha256(
+                        f"{source_id}:{create_time}:{i}:{text[:80]}".encode()
+                    ).hexdigest()[:16]
+                    result.append(Chunk(
+                        id=chunk_id,
+                        text=chunk_text,
+                        metadata={
+                            **self._metadata,
+                            "create_time": create_time,
+                            "title": title,
+                            "turn_index": i,
+                        },
+                        source_id=source_id,
+                    ))
+                    i += 2
+                else:
+                    i += 1
+
+        return result
