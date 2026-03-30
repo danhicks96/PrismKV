@@ -4,6 +4,26 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [1.0.0] — 2026-03-30
+
+### Added
+- **M11 End-to-end benchmark**: `prismkv.eval.e2e_benchmark` — memory footprint
+  table + reconstruction quality at 3/4/5 bits/dim vs FP16 baseline
+- `compute_memory_table()` — theoretical KV cache memory at 1K/4K/16K context
+  lengths for any model geometry (no model download required)
+- `evaluate_quality()` — RMSE, cosine similarity, relative error: PrismKV vs 2D polar
+  baseline, on synthetic or real KV vectors
+- `run_e2e_benchmark()` — single entry point returning `E2EReport` dataclass
+- `print_e2e_table()` — formatted memory + quality tables with compression ratios
+- `measure_pseudo_perplexity()` — cross-entropy pseudo-perplexity via GPT-2
+  (optional; requires `transformers`; reports nats/token per bit budget)
+- `scripts/run_e2e_benchmark.py` — CLI: `--kv-file`, `--pseudo-ppl`, `--save-json`
+- 21 new tests in `test_e2e_benchmark.py`
+- CI updated: `test_e2e_benchmark.py` in both jobs; `test_m10_persistence.py` +
+  `test_model_arch.py` added to eval job
+
+---
+
 ## [0.9.0] — 2026-03-30
 
 ### Added

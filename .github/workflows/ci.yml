@@ -41,6 +41,7 @@ jobs:
             tests/test_bias_correction.py \
             tests/test_bit_alloc.py \
             tests/test_polar_attention.py \
+            tests/test_e2e_benchmark.py \
             -v --tb=short
 
       - name: Coverage (core quantizer modules)
@@ -52,6 +53,7 @@ jobs:
             tests/test_bias_correction.py \
             tests/test_bit_alloc.py \
             tests/test_polar_attention.py \
+            tests/test_e2e_benchmark.py \
             --cov=src/prismkv/quantizer \
             --cov-report=term-missing \
             --cov-fail-under=85
@@ -91,4 +93,7 @@ jobs:
             tests/test_rag_adapters.py \
             tests/test_rag_ingestion.py \
             tests/test_rag_engine.py \
+            tests/test_m10_persistence.py \
+            tests/test_model_arch.py \
+            tests/test_e2e_benchmark.py \
             -v --tb=short

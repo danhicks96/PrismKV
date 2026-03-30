@@ -5,7 +5,7 @@
 **First published:** 2026-03-30
 **Author:** Dan Hicks · [github.com/danhicks96](https://github.com/danhicks96)
 **License:** Apache-2.0
-**Version:** 0.6.0
+**Version:** 1.0.0
 **Status:** Defensive prior-art publication. All ideas herein are released under Apache-2.0.
 
 ---
@@ -208,11 +208,14 @@ PrismKV/
 │   ├── eval/
 │   │   ├── kv_collector.py       — transformers 5.x KV hook collector (M2)
 │   │   ├── benchmark.py          — RMSE / cosine / throughput benchmarks (M2)
-│   │   └── attention_entropy.py  — per-head Shannon entropy (M7)
+│   │   ├── attention_entropy.py  — per-head Shannon entropy (M7)
+│   │   ├── model_arch.py         — ModelArchRegistry + GQA support (M8)
+│   │   └── e2e_benchmark.py      — memory table + quality report (M11)
 │   ├── cache/
 │   │   ├── kv_cache.py           — PrismKVCache(DynamicCache) drop-in (M3)
 │   │   ├── cache_config.py       — PrismKVConfig dataclass
-│   │   └── dim_aligner.py        — pad head_dim to multiple of 3
+│   │   ├── dim_aligner.py        — pad head_dim to multiple of 3
+│   │   └── cache_store.py        — save_cache / load_cache NPZ (M10)
 │   └── rag/
 │       ├── rag_engine.py         — RAGEngine public API (M6)
 │       ├── vector_store.py       — SQLite + pure-torch cosine store
@@ -220,9 +223,9 @@ PrismKV/
 │       ├── ingestion.py          — IngestionEngine with deduplication
 │       ├── retriever.py          — hybrid vector + graph retrieval
 │       ├── context_assembler.py  — token-budget-aware context builder
-│       ├── adapters.py           — TextAdapter, DictAdapter, FileAdapter
+│       ├── adapters.py           — TextAdapter, DictAdapter, FileAdapter, APIAdapter
 │       └── schema.py             — Chunk, Node, RetrievalResult
-├── tests/                        — 131 tests across all modules
+├── tests/                        — 170+ tests across all modules
 ├── examples/
 │   ├── demo.py                   — 2-D vs 3-D quantizer comparison
 │   ├── hf_integration.py         — GPT-2 with PrismKVCache
@@ -231,7 +234,8 @@ PrismKV/
 │   └── adaptive_demo.py          — BitAllocator → PrismKVCache
 ├── scripts/
 │   ├── build_codebooks.py        — CLI: train learned codebooks
-│   └── collect_kv_calibration.py — extract KV tensors from GPT-2
+│   ├── collect_kv_calibration.py — extract KV tensors from GPT-2
+│   └── run_e2e_benchmark.py      — CLI: memory + quality benchmark (M11)
 ├── design.md                     — full architecture & math specification
 └── pyproject.toml
 ```
@@ -249,10 +253,13 @@ PrismKV/
 | M5 | 0.4.0 | CI/CD — GitHub Actions + PyPI OIDC trusted publishing |
 | M6 | 0.5.0 | RAG framework — vector store, graph index, adapters, RAGEngine |
 | M7 | 0.6.0 | Adaptive bit allocation — water-filling from attention entropy |
+| M8 | 0.7.0 | Multi-model support — `ModelArchRegistry`, GQA-aware `KVCollector` |
+| M9 | 0.8.0 | Polar-space attention approximation — novel prior-art contribution |
+| M10 | 0.9.0 | Cache persistence (`save_cache`/`load_cache`) + `APIAdapter` |
+| M11 | 1.0.0 | End-to-end benchmark — memory table + quality comparison |
 
-### Still planned
-- **CUDA kernel** — on-the-fly dequantization fused with attention computation
-- **ONNX export** — quantized cache for inference engines
+### Future work
+- **CUDA kernel** — fused dequantization + QK dot product in a single kernel
 
 ## RAG Framework (M6)
 
@@ -264,7 +271,7 @@ from prismkv.rag.adapters import DictAdapter
 
 engine = RAGEngine(db_path=":memory:", embedder=my_embed_fn)
 
-# Ingest — any adapter: text file, dict list, plain string
+# Ingest — any adapter: text file, dict list, plain string, REST endpoint
 engine.ingest(DictAdapter(game_states, entity_key="name"))
 
 # Query
@@ -291,6 +298,97 @@ cache = PrismKVCache(configs=configs)
 ```
 
 The allocator uses water-filling (`sensitivity = 1/H(l,h)`) with a greedy post-rounding correction that guarantees the mean bits/dim is within `1/(6n)` of target after discretisation.
+
+## Multi-Model Support (M8)
+
+Auto-detect transformer architecture and collect real KV vectors from any supported model:
+
+```python
+from prismkv.eval.model_arch import ModelArchRegistry
+from prismkv.eval.kv_collector import KVCollector
+
+# Supports GPT-2, OPT, LLaMA/Mistral/Gemma/CodeLlama, Falcon, Qwen2, Phi
+arch = ModelArchRegistry.detect(model)
+
+collector = KVCollector(model, device="cpu")
+kv_data = collector.collect(input_ids, layer_idx=0)  # {0: {"keys": ..., "values": ...}}
+```
+
+GQA-aware: reads `num_key_value_heads` from config for LLaMA-2-70B, Mistral-7B, etc.
+
+## Polar-Space Attention Approximation (M9)
+
+Approximate attention scores directly from compressed PrismKV codes — no full dequantization:
+
+```python
+from prismkv.quantizer.polar_attention import PolarAttentionApprox, measure_polar_approx_error
+
+# Drop-in scaled dot-product approximation
+approx = PolarAttentionApprox(
+    bits_z=4, bits_r=4, bits_theta=4,
+    z_min=qtz.z_min, z_max=qtz.z_max, r_max=qtz.r_max,
+    scale=1/math.sqrt(head_dim), R=qtz.R,
+)
+output, weights = approx.forward(q, k_codes, v)  # (b, nh, sq, d), (b, nh, sq, sk)
+
+# Measure approximation error vs exact Cartesian dot product
+err = measure_polar_approx_error(q, k, k_codes, ..., R=qtz.R)
+# {'mean_abs_error': ..., 'max_abs_error': ..., 'cosine_sim': ...}
+```
+
+The identity `<q, k> = Σ_j q_z·k_z + r_q·r_k·cos(θ_q − θ_k)` per triplet group enables
+computing attention scores from codes without materialising full FP16 key tensors.
+
+## Cache Persistence (M10)
+
+Save and load compressed KV caches to disk:
+
+```python
+from prismkv.cache.cache_store import save_cache, load_cache
+
+# Serialize compressed codes + config to NPZ
+save_cache(cache, "checkpoint.npz")
+
+# Reconstruct — returns PrismKVCache with fully seeded DynamicCache layers
+cache = load_cache("checkpoint.npz", device="cpu")
+```
+
+REST API ingestion for the RAG engine:
+
+```python
+from prismkv.rag.adapters import APIAdapter
+
+engine.ingest(APIAdapter(
+    "https://api.example.com/articles",
+    text_field="body",
+    source_id="api_articles",
+))
+```
+
+## End-to-End Benchmark (M11)
+
+Memory footprint and reconstruction quality comparison — no model download required:
+
+```python
+from prismkv.eval.e2e_benchmark import run_e2e_benchmark, print_e2e_table
+
+report = run_e2e_benchmark(head_dim=64, n_heads=12, n_layers=12)
+print_e2e_table(report)
+```
+
+```
+KV Cache Memory Footprint  (12L × 12H × d=64)
+Context     FP16       3bit       4bit       5bit
+  1,024    18.0MB   3.4MB(5.3×)  4.5MB(4.0×)  5.6MB(3.2×)
+  4,096    72.0MB  13.5MB(5.3×) 18.0MB(4.0×) 22.5MB(3.2×)
+ 16,384   288.0MB  54.0MB(5.3×) 72.0MB(4.0×) 90.0MB(3.2×)
+```
+
+For pseudo-perplexity measurement (requires GPT-2 download):
+
+```bash
+python scripts/run_e2e_benchmark.py --pseudo-ppl
+```
 
 ---
 
