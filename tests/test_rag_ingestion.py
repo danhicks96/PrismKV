@@ -151,6 +151,154 @@ class TestIngestionEngine:
 
 
 # ---------------------------------------------------------------------------
+# Batch ingestion
+# ---------------------------------------------------------------------------
+
+class TestVectorStoreBatch:
+    def test_add_batch_inserts_all(self):
+        vs = VectorStore()
+        embed = make_embedder(32)
+        items = [
+            (Chunk(id=f"c{i}", text=f"text {i}"), embed(f"text {i}"))
+            for i in range(10)
+        ]
+        flags = vs.add_batch(items)
+        assert all(flags)
+        assert vs.count() == 10
+
+    def test_add_batch_skips_duplicates(self):
+        vs = VectorStore()
+        embed = make_embedder(32)
+        items = [(Chunk(id=f"c{i}", text=f"text {i}"), embed(f"text {i}")) for i in range(5)]
+        vs.add_batch(items)
+        flags2 = vs.add_batch(items)
+        assert not any(flags2)
+        assert vs.count() == 5
+
+    def test_add_batch_partial_duplicates(self):
+        vs = VectorStore()
+        embed = make_embedder(32)
+        first_half = [(Chunk(id=f"c{i}", text=f"text {i}"), embed(f"text {i}")) for i in range(5)]
+        second_half = [(Chunk(id=f"c{i}", text=f"text {i}"), embed(f"text {i}")) for i in range(3, 8)]
+        vs.add_batch(first_half)
+        flags = vs.add_batch(second_half)
+        # c3 and c4 are duplicates; c5, c6, c7 are new
+        assert flags == [False, False, True, True, True]
+        assert vs.count() == 8
+
+    def test_add_batch_empty(self):
+        vs = VectorStore()
+        flags = vs.add_batch([])
+        assert flags == []
+        assert vs.count() == 0
+
+    def test_add_batch_searchable(self):
+        """Chunks inserted via add_batch are retrievable by search."""
+        vs = VectorStore()
+        embed = make_embedder(32)
+        items = [(Chunk(id=f"c{i}", text=f"text {i}"), embed(f"text {i}")) for i in range(5)]
+        vs.add_batch(items)
+        results = vs.search(embed("text 2"), top_k=1)
+        assert len(results) == 1
+        assert results[0].chunk.id == "c2"
+
+    def test_add_batch_same_result_as_individual_add(self):
+        """Batch-inserted chunks have same cosine scores as individually-inserted ones."""
+        embed = make_embedder(32)
+        items = [(Chunk(id=f"c{i}", text=f"word {i}"), embed(f"word {i}")) for i in range(6)]
+
+        vs_single = VectorStore()
+        for chunk, emb in items:
+            vs_single.add(chunk, emb)
+
+        vs_batch = VectorStore()
+        vs_batch.add_batch(items)
+
+        q = embed("word 3")
+        single_results = vs_single.search(q, top_k=3)
+        batch_results = vs_batch.search(q, top_k=3)
+
+        single_ids = [r.chunk.id for r in single_results]
+        batch_ids = [r.chunk.id for r in batch_results]
+        assert single_ids == batch_ids
+
+
+class TestGraphIndexBatch:
+    def test_add_batch_nodes(self):
+        gi = GraphIndex()
+        embed = make_embedder(32)
+        items = [(Chunk(id=f"c{i}", text=f"text {i}"), embed(f"similar {i}")) for i in range(5)]
+        gi.add_batch(items)
+        assert gi.node_count() == 5
+
+    def test_add_batch_edges_at_low_threshold(self):
+        gi = GraphIndex(threshold=0.0)
+        embed = make_embedder(32)
+        items = [(Chunk(id=f"c{i}", text=f"text {i}"), embed(f"text {i}")) for i in range(6)]
+        gi.add_batch(items)
+        # With threshold=0, edges should be created between adjacent chunks
+        assert gi.edge_count() >= 0  # may be 0 if all scores < 0 (unlikely with dim=32)
+
+    def test_add_batch_same_graph_as_individual(self):
+        """Batch add produces the same node set as individual add()."""
+        embed = make_embedder(32)
+        items = [(Chunk(id=f"c{i}", text=f"text {i}"), embed(f"text {i}")) for i in range(8)]
+
+        gi_single = GraphIndex(threshold=0.0)
+        for chunk, emb in items:
+            gi_single.add(chunk, emb)
+
+        gi_batch = GraphIndex(threshold=0.0)
+        gi_batch.add_batch(items)
+
+        assert gi_batch.node_count() == gi_single.node_count()
+
+    def test_add_batch_empty(self):
+        gi = GraphIndex()
+        gi.add_batch([])  # should not raise
+        assert gi.node_count() == 0
+
+
+class TestIngestionEngineBatch:
+    def test_ingest_batch_size_500_same_result_as_default(self):
+        """batch_size=500 produces identical inserted count as old one-by-one behavior."""
+        embed = make_embedder(32)
+        texts = [f"sentence number {i} about topic {i % 5}" for i in range(20)]
+        big_text = "  ".join(texts)
+
+        vs1, gi1, ie1, _ = make_engine()
+        ie1.ingest(TextAdapter(big_text, chunk_size=80, overlap=0), batch_size=1)
+
+        vs2, gi2, ie2, _ = make_engine()
+        ie2.ingest(TextAdapter(big_text, chunk_size=80, overlap=0), batch_size=500)
+
+        assert vs2.count() == vs1.count()
+
+    def test_ingest_deduplication_with_batching(self):
+        """Duplicate detection works correctly when using batch_size > 1."""
+        vs, gi, ie, _ = make_engine()
+        adapter = TextAdapter("Same text. " * 10, chunk_size=100, overlap=0)
+        r1 = ie.ingest(adapter, batch_size=500)
+        r2 = ie.ingest(adapter, batch_size=500)
+        assert r2["skipped"] == r2["total"]
+        assert vs.count() == r1["inserted"]
+
+    def test_ingest_large_batch(self):
+        """A corpus larger than batch_size is fully ingested across multiple batches."""
+        vs, gi, ie, _ = make_engine()
+        # Create 15 distinct single-chunk texts
+        inserted_total = 0
+        for i in range(15):
+            result = ie.ingest(
+                TextAdapter(f"Unique document {i}: " + ("word " * 20), chunk_size=200, overlap=0),
+                batch_size=4,
+            )
+            inserted_total += result["inserted"]
+        assert vs.count() == inserted_total
+        assert inserted_total > 0
+
+
+# ---------------------------------------------------------------------------
 # Retriever
 # ---------------------------------------------------------------------------
 

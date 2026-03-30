@@ -40,32 +40,53 @@ class IngestionEngine:
         self._ingested = 0
         self._skipped = 0
 
-    def ingest(self, adapter: BaseAdapter) -> dict:
+    def ingest(self, adapter: BaseAdapter, batch_size: int = 500) -> dict:
         """
         Ingest all chunks from an adapter.
+
+        Parameters
+        ----------
+        adapter    : any BaseAdapter subclass
+        batch_size : number of chunks per SQLite transaction (default 500).
+                     Larger values reduce commit overhead during bulk ingestion.
+                     Set to 1 to use the legacy one-chunk-per-transaction path.
 
         Returns
         -------
         dict with keys 'inserted', 'skipped', 'total'
         """
-        chunks = adapter.chunks()
-        inserted = 0
-        skipped = 0
+        chunks = list(adapter.chunks())
+        total_inserted = 0
+        total_skipped = 0
 
-        for i, chunk in enumerate(chunks):
-            chunk.timestamp = self._ingested + i
-            embedding = self.embed_fn(chunk.text)
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            for i, chunk in enumerate(batch):
+                chunk.timestamp = self._ingested + start + i
 
-            added = self.vector_store.add(chunk, embedding)
-            if added:
-                self.graph_index.add(chunk, embedding)
-                inserted += 1
-            else:
-                skipped += 1
+            # Embed each chunk (per-chunk; batched embedding APIs can wrap embed_fn externally)
+            pairs = [(chunk, self.embed_fn(chunk.text)) for chunk in batch]
 
-        self._ingested += inserted
-        self._skipped += skipped
-        return {"inserted": inserted, "skipped": skipped, "total": len(chunks)}
+            # One transaction for the whole sub-batch
+            insert_flags = self.vector_store.add_batch(pairs)
+            batch_inserted = sum(insert_flags)
+            batch_skipped = len(pairs) - batch_inserted
+
+            # Pass only newly-inserted chunks to the graph
+            new_pairs = [p for p, flag in zip(pairs, insert_flags) if flag]
+            if new_pairs:
+                self.graph_index.add_batch(new_pairs)
+
+            total_inserted += batch_inserted
+            total_skipped += batch_skipped
+
+        self._ingested += total_inserted
+        self._skipped += total_skipped
+        return {
+            "inserted": total_inserted,
+            "skipped": total_skipped,
+            "total": len(chunks),
+        }
 
     @property
     def stats(self) -> dict:

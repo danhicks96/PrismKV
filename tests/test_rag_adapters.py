@@ -1,11 +1,39 @@
 """
-test_rag_adapters.py — Tests for TextAdapter, DictAdapter, FileAdapter.
+test_rag_adapters.py — Tests for TextAdapter, DictAdapter, FileAdapter, ChatGPTExportAdapter.
 """
 
+import json
 import tempfile
 import pytest
-from prismkv.rag.adapters import TextAdapter, DictAdapter, FileAdapter
+from prismkv.rag.adapters import TextAdapter, DictAdapter, FileAdapter, ChatGPTExportAdapter
 from prismkv.rag.schema import Chunk
+
+
+def _make_chatgpt_export(conversations: list) -> str:
+    """Write a ChatGPT export fixture to a temp file; return path."""
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
+    json.dump(conversations, f)
+    f.close()
+    return f.name
+
+
+def _simple_conv(title: str, turns: list[tuple[str, str]], create_time: int = 0) -> dict:
+    """Build a minimal ChatGPT export conversation dict from (user, assistant) pairs."""
+    mapping = {}
+    prev = None
+    for i, (role, text) in enumerate(turns):
+        nid = f"node_{i}"
+        mapping[nid] = {
+            "id": nid,
+            "parent": prev,
+            "children": [f"node_{i+1}"] if i + 1 < len(turns) else [],
+            "message": {
+                "author": {"role": role},
+                "content": {"parts": [text]},
+            },
+        }
+        prev = nid
+    return {"title": title, "create_time": create_time, "mapping": mapping}
 
 
 class TestTextAdapter:
@@ -110,3 +138,75 @@ class TestFileAdapter:
 
         chunks = FileAdapter(path).chunks()
         assert all(c.source_id == path for c in chunks)
+
+
+class TestChatGPTExportAdapter:
+    def test_one_turn_pair_produces_one_chunk(self):
+        conv = _simple_conv("Test convo", [("user", "Hello"), ("assistant", "Hi there")])
+        path = _make_chatgpt_export([conv])
+        chunks = ChatGPTExportAdapter(path).chunks()
+        assert len(chunks) == 1
+        assert "Hello" in chunks[0].text
+        assert "Hi there" in chunks[0].text
+
+    def test_multiple_turns_produce_multiple_chunks(self):
+        conv = _simple_conv("Multi-turn", [
+            ("user", "Q1"), ("assistant", "A1"),
+            ("user", "Q2"), ("assistant", "A2"),
+            ("user", "Q3"), ("assistant", "A3"),
+        ])
+        path = _make_chatgpt_export([conv])
+        chunks = ChatGPTExportAdapter(path).chunks()
+        assert len(chunks) == 3
+
+    def test_title_in_chunk_text(self):
+        conv = _simple_conv("My Conversation Title", [("user", "question"), ("assistant", "answer")])
+        path = _make_chatgpt_export([conv])
+        chunks = ChatGPTExportAdapter(path).chunks()
+        assert "My Conversation Title" in chunks[0].text
+
+    def test_metadata_contains_create_time(self):
+        conv = _simple_conv("Timed", [("user", "q"), ("assistant", "a")], create_time=1234567890)
+        path = _make_chatgpt_export([conv])
+        chunks = ChatGPTExportAdapter(path).chunks()
+        assert chunks[0].metadata["create_time"] == 1234567890
+
+    def test_multiple_conversations(self):
+        convs = [
+            _simple_conv(f"Conv {i}", [("user", f"q{i}"), ("assistant", f"a{i}")])
+            for i in range(5)
+        ]
+        path = _make_chatgpt_export(convs)
+        chunks = ChatGPTExportAdapter(path).chunks()
+        assert len(chunks) == 5
+
+    def test_chunk_ids_unique(self):
+        convs = [
+            _simple_conv(f"Conv {i}", [("user", f"unique question {i}"), ("assistant", f"answer {i}")])
+            for i in range(10)
+        ]
+        path = _make_chatgpt_export(convs)
+        chunks = ChatGPTExportAdapter(path).chunks()
+        ids = [c.id for c in chunks]
+        assert len(ids) == len(set(ids))
+
+    def test_unpaired_user_turn_skipped(self):
+        """A trailing user message without an assistant reply is not emitted."""
+        conv = _simple_conv("Incomplete", [
+            ("user", "Q1"), ("assistant", "A1"),
+            ("user", "dangling question"),
+        ])
+        path = _make_chatgpt_export([conv])
+        chunks = ChatGPTExportAdapter(path).chunks()
+        assert len(chunks) == 1
+
+    def test_empty_export_no_chunks(self):
+        path = _make_chatgpt_export([])
+        chunks = ChatGPTExportAdapter(path).chunks()
+        assert chunks == []
+
+    def test_extra_metadata_propagated(self):
+        conv = _simple_conv("Meta test", [("user", "q"), ("assistant", "a")])
+        path = _make_chatgpt_export([conv])
+        chunks = ChatGPTExportAdapter(path, metadata={"project": "test_proj"}).chunks()
+        assert chunks[0].metadata["project"] == "test_proj"

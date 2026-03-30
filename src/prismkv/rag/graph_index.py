@@ -120,6 +120,58 @@ class GraphIndex:
             if len(self._recent) > N_NEIGHBOR_WINDOW:
                 self._recent.pop(0)
 
+    def add_batch(self, items: List[tuple]) -> None:
+        """
+        Add multiple (Chunk, embedding) pairs in a single graph transaction.
+
+        Semantically equivalent to calling add() for each item, but collects
+        all new edges across the entire batch and writes them with a single
+        executemany — replacing N separate transactions with one.
+
+        Parameters
+        ----------
+        items : list of (Chunk, Tensor) — only newly-inserted chunks (not duplicates)
+        """
+        if not items:
+            return
+
+        with self._lock:
+            all_new_edges: List[tuple] = []
+
+            for chunk, embedding in items:
+                self._G.add_node(chunk.id)
+                self._loaded = True
+
+                q_norm = torch.nn.functional.normalize(
+                    embedding.float().reshape(1, -1), dim=1
+                )
+
+                if self._recent:
+                    recent_ids = [r[0] for r in self._recent]
+                    recent_embs = torch.stack([r[1] for r in self._recent])
+                    recent_norms = torch.nn.functional.normalize(recent_embs, dim=1)
+                    scores = (recent_norms @ q_norm.T).squeeze(1)
+
+                    for i, score in enumerate(scores.tolist()):
+                        if score >= self.threshold:
+                            src, dst = chunk.id, recent_ids[i]
+                            self._G.add_edge(src, dst, weight=score)
+                            self._G.add_edge(dst, src, weight=score)
+                            all_new_edges.append((src, dst, score))
+                            all_new_edges.append((dst, src, score))
+
+                self._recent.append((chunk.id, embedding.float()))
+                if len(self._recent) > N_NEIGHBOR_WINDOW:
+                    self._recent.pop(0)
+
+            if all_new_edges:
+                with self._conn as conn:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO graph_edges (src, dst, weight) "
+                        "VALUES (?, ?, ?)",
+                        all_new_edges,
+                    )
+
     # ------------------------------------------------------------------
     # Retrieval
     # ------------------------------------------------------------------

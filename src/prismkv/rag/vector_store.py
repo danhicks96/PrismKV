@@ -127,6 +127,82 @@ class VectorStore:
                 # content_hash UNIQUE violation → duplicate
                 return False
 
+    def add_batch(
+        self, items: List[Tuple[Chunk, torch.Tensor]]
+    ) -> List[bool]:
+        """
+        Insert a batch of (Chunk, embedding) pairs in a single SQLite transaction.
+
+        Deduplicates by content_hash (same semantics as add()).  Setting _dirty
+        only once per batch avoids reloading the embedding matrix N times during
+        large ingestion runs.
+
+        Returns
+        -------
+        list[bool] parallel to *items* — True if the chunk was newly inserted,
+        False if it was already present (duplicate skipped).
+        """
+        import json
+
+        if not items:
+            return []
+
+        with self._lock:
+            # One SELECT to find which content_hashes already exist in the DB.
+            hashes = [c.content_hash for c, _ in items]
+            placeholders = ",".join("?" * len(hashes))
+            existing = {
+                row[0]
+                for row in self._conn.execute(
+                    f"SELECT content_hash FROM chunks WHERE content_hash IN ({placeholders})",
+                    hashes,
+                ).fetchall()
+            }
+
+            # Deduplicate within the batch itself (keep first occurrence per hash).
+            seen_in_batch: set = set()
+            new_items = []
+            flags = []
+            for c, e in items:
+                if c.content_hash in existing or c.content_hash in seen_in_batch:
+                    flags.append(False)
+                else:
+                    seen_in_batch.add(c.content_hash)
+                    new_items.append((c, e))
+                    flags.append(True)
+
+            if new_items:
+                max_ts = self._conn.execute(
+                    "SELECT COALESCE(MAX(timestamp), 0) FROM chunks"
+                ).fetchone()[0]
+
+                chunk_rows = [
+                    (
+                        c.id, c.text, json.dumps(c.metadata),
+                        c.source_id, c.content_hash, max_ts + i + 1,
+                    )
+                    for i, (c, _) in enumerate(new_items)
+                ]
+                emb_rows = [
+                    (c.id, e.float().numpy().tobytes())
+                    for c, e in new_items
+                ]
+
+                with self._conn as conn:
+                    conn.executemany(
+                        "INSERT INTO chunks "
+                        "(id, text, metadata, source_id, content_hash, timestamp) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        chunk_rows,
+                    )
+                    conn.executemany(
+                        "INSERT INTO embeddings (chunk_id, vector) VALUES (?, ?)",
+                        emb_rows,
+                    )
+                self._dirty = True  # mark once for the whole batch
+
+        return flags
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------

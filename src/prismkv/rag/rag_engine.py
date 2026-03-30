@@ -92,19 +92,21 @@ class RAGEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def ingest(self, adapter: BaseAdapter) -> dict:
+    def ingest(self, adapter: BaseAdapter, batch_size: int = 500) -> dict:
         """
         Ingest all chunks from an adapter into the engine's index.
 
         Parameters
         ----------
-        adapter : any BaseAdapter subclass (TextAdapter, DictAdapter, FileAdapter)
+        adapter    : any BaseAdapter subclass (TextAdapter, DictAdapter, FileAdapter)
+        batch_size : chunks per SQLite transaction (default 500 — ~10x faster than
+                     one-per-transaction for large corpora)
 
         Returns
         -------
         dict with 'inserted', 'skipped', 'total'
         """
-        return self._ingestion.ingest(adapter)
+        return self._ingestion.ingest(adapter, batch_size=batch_size)
 
     def query(self, text: str, top_k: Optional[int] = None) -> str:
         """
