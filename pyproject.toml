@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prismkv"
-version = "0.2.0"
+version = "0.3.0"
 description = "3-D Stacked-Plane KV Cache Quantizer — defensive prior art publication"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -32,6 +32,9 @@ dev = [
 eval = [
     "transformers>=4.36.0",
     "accelerate>=0.26.0",
+]
+cache = [
+    "transformers>=4.36.0",
 ]
 
 [project.urls]
