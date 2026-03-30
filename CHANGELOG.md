@@ -4,6 +4,34 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [1.4.0] — 2026-03-30
+
+### Added
+- **M14 Comprehensive Validation Suite** — elevates benchmark coverage from
+  "mostly synthetic, one layer" to a full real-data evidence package
+- `tests/test_kv_collector.py` expanded: `setup_class` collects all 12 GPT-2 layers
+  once; `test_gpt2_benchmark_all_layers` trains per-layer codebooks and asserts
+  learned scheme wins on ≥10/12 layers; `test_gpt2_per_layer_entropy_range` validates
+  heterogeneous attention patterns (range > 0.5 nats across 144 heads)
+- `tests/test_real_data_validation.py` — 12 new tests:
+  - `TestBiasCorrectionRealData`: max abs per-dim bias < 0.1 after `calibrate_bias()`
+    on real GPT-2 layer-0 KV data (measured: 0.0161)
+  - `TestAdaptiveAllocationE2E`: entropy → `BitAllocator` → per-layer `PrismKVConfig`;
+    mean bits/dim within 0.05 of target; heterogeneous heads provably get more bits
+  - `TestMultiLayerConsistency`: multi-layer codebook yields finite RMSE on all 12
+    layers; per-layer RMSE variance > 0 confirms heterogeneous KV distributions
+- `run_e2e_benchmark(adaptive_allocation=True, entropy=...)` — adds "3D Adaptive
+  (entropy water-fill)" row to quality report via `BitAllocator` water-filling
+- `scripts/run_validation.py` — one-shot validation pipeline: collect → codebook →
+  per-layer benchmark → adaptive allocation → bias correction → pseudo-perplexity;
+  writes `results/validation_report.json`
+- `.github/workflows/ci.yml`: `test_real_data_validation.py` in eval job;
+  pseudo-perplexity quality gate (delta < 1.5 nats/token at 4 bits/dim on GPT-2)
+- `results/validation_report.json` — committed: adaptive δ=0.0000 bits/dim,
+  max_abs_bias=0.0161 per dim, ppl delta=0.76 nats/token — all checks pass
+
+---
+
 ## [1.3.0] — 2026-03-30
 
 ### Added
