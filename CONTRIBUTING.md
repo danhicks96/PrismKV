@@ -26,7 +26,7 @@ pip install -e ".[dev,eval,cache,rag]"
 pytest tests/ -v
 ```
 
-198 tests total across all modules.
+234 tests total across all modules.
 
 ## Contribution Guidelines
 
