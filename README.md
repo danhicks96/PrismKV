@@ -203,18 +203,19 @@ Expected output (CPU, <5 seconds):
 ### Run tests
 
 ```bash
+# Core tests — no model downloads, <2 min
 pip install -e ".[dev]"
-pytest tests/ -v
-```
+pytest tests/test_quantizer.py tests/test_learned_codebooks.py \
+       tests/test_bias_correction.py tests/test_bit_alloc.py \
+       tests/test_polar_attention.py tests/test_e2e_benchmark.py \
+       tests/test_m12_framework_agnostic.py -v
 
-All 131 tests pass (36 core, 95 eval+cache+RAG).
-
-For the full suite including RAG and cache tests:
-
-```bash
+# Full suite — requires transformers + networkx, ~5 min
 pip install -e ".[dev,eval,cache,rag]"
 pytest tests/ -v
 ```
+
+234 tests across all modules (126 core, 108 eval+cache+RAG).
 
 ---
 
