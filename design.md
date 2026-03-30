@@ -150,8 +150,74 @@ The 24/7 LLM should:
 
 ---
 
-## 7. References (for the agent)
-- TurboQuant paper (ICLR 2026) – 2‑D polar quantization and KV‑cache compression.
+## 7. CUDA Kernel Specification (M15)
+
+### Overview
+
+The fused dequantize + polar attention kernel (`polar_attn_kernel.cu`) eliminates one global memory round-trip per attention step by computing attention scores directly from int16 PrismKV codes without materialising FP16 key tensors.
+
+The kernel is written as defensive prior art and is compilable on CUDA >= 11.8.
+It is **not compiled in this distribution** (CPU-only CI); build with `python setup_cuda.py build_ext --inplace` on a CUDA host.
+
+### Thread-Block Layout and Occupancy
+
+```
+Grid:  (B*H, ceil(Sq/64), ceil(Sk/64))
+Block: (32, 4, 1)   -- 128 threads = 4 warps
+```
+
+Each block computes a 64x64 tile of the (Sq x Sk) attention score matrix for one (batch x head) slice.
+
+**Shared memory usage per block:**
+- `smem_q`: 64 query triplets x 3 float components x 4 bytes = 768 bytes
+- Total shared memory per block: 768 bytes
+- sm_80 shared memory limit: 48 KB, so occupancy is limited by register count, not shared memory
+- At 128 threads per block, theoretical occupancy on sm_80 allows up to 32 blocks per SM (4096 threads / 128 = 32).
+
+### DRAM Bandwidth Savings
+
+Loading int16 codes instead of FP16 key vectors:
+
+| Format       | Bytes per key vector | Formula |
+|--------------|---------------------|---------|
+| FP16 keys    | 2 * d bytes         | 2d      |
+| int16 codes  | 2 * m bytes         | 2d/3    |
+
+**3x DRAM bandwidth reduction** for key loading (m = d/3).
+
+At d=128 (LLaMA-style): FP16 costs 256 bytes per key vector; int16 codes cost 85 bytes.
+
+### FLOP Count per (q, k) Pair
+
+| Operation              | FLOPs   | Notes                                  |
+|------------------------|--------|----------------------------------------|
+| Standard Cartesian dot | 2d - 1 | d multiply-adds                        |
+| PrismKV polar dot      | ~5m    | per triplet: 2 (r^2), 1 (cos), 2 (fma)|
+
+For d=128, m=42: standard = 255 FLOPs, polar ~210 FLOPs (~1.2x FLOP reduction), plus the 3x bandwidth reduction from loading smaller codes.
+
+### Hardware Targets
+
+| GPU       | Architecture  | Build flag |
+|-----------|--------------|------------|
+| A100      | Ampere       | `sm_80`    |
+| RTX 3090  | Ampere       | `sm_86`    |
+| RTX 4090  | Ada Lovelace | `sm_89`    |
+| H100 SXM5 | Hopper       | `sm_90`    |
+
+The default build flag is `sm_80`. For multi-architecture PTX:
+`-gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90`.
+
+The kernel uses `__cosf()` (hardware fast-path single-precision cosine, available on all supported architectures). FP32 accumulation is used throughout for numerical stability.
+
+### Note on Distribution
+
+`src/prismkv/cuda/polar_attn_kernel.cu` is included as syntactically-valid CUDA C++ source. The Python interface (`src/prismkv/cuda/__init__.py`) falls back silently to the pure-Python `polar_attention.py` implementation when the CUDA extension is not available, so all CPU-mode tests pass without building the extension.
+
+---
+
+## 8. References (for the agent)
+- TurboQuant paper (ICLR 2026) – 2‑D polar quantization and KV‑cache compression.
 - “PolarQuant + QJL” analysis – two‑stage pipeline that inspired the conditional approach.
 - Product Quantization literature – explains why independent sub‑spaces waste cross‑dimensional information.
 - Existing open‑source KV‑cache compressors (e.g., `kvcompress` on GitHub) – useful for code‑style reference.

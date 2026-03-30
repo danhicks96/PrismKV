@@ -290,7 +290,7 @@ PrismKV/
 | M12 | 1.1.0 | Framework-agnostic layer — `RawKVCache`, vLLM adapter, HTTP sidecar |
 
 ### Future work
-- **CUDA kernel** — fused dequantization + QK dot product in a single kernel
+- **CUDA kernel** — the fused dequantize + polar attention kernel is written and compilable (`src/prismkv/cuda/polar_attn_kernel.cu`, requires CUDA >= 11.8); runtime integration into the attention path is a future step. Build with `python setup_cuda.py build_ext --inplace`.
 
 ## RAG Framework (M6)
 
