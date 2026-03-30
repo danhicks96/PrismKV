@@ -32,6 +32,7 @@ import torch
 from prismkv.utils import make_rotation
 from prismkv.quantizer.learned_codebook import LearnedSliceCodebook
 from prismkv.quantizer.bias_correction import BiasTable, calibrate_bias
+from prismkv.quantizer.lloyd_max import LloydMaxQuantizer1D
 
 
 class StackedPlaneQuantizer:
@@ -103,11 +104,18 @@ class StackedPlaneQuantizer:
         # Bias correction table (None = no correction)
         self._bias: Optional[BiasTable] = None
 
+        # Lloyd-Max optimal z quantizer (None = use uniform z bins)
+        self._lloyd_max_z: Optional[LloydMaxQuantizer1D] = None
+
     # ------------------------------------------------------------------
     # Optional calibration
     # ------------------------------------------------------------------
 
-    def calibrate(self, vectors: torch.Tensor) -> None:
+    def calibrate(
+        self,
+        vectors: torch.Tensor,
+        percentile_clip: float = 0.0,
+    ) -> None:
         """
         Tighten quantization ranges using a representative sample of vectors.
 
@@ -116,18 +124,57 @@ class StackedPlaneQuantizer:
 
         Parameters
         ----------
-        vectors : Tensor shape (N, dim)  — raw (unrotated) KV vectors
+        vectors          : Tensor shape (N, dim)  — raw (unrotated) KV vectors
+        percentile_clip  : float in [0, 0.5)  — fraction to clip from each tail.
+                           0.0 (default) = no clipping, same behaviour as before.
+                           Recommended value: 0.005 (0.5th / 99.5th percentile).
+                           Tightens z_min/z_max/r_max for the bulk of the
+                           distribution without changing the bit budget.
         """
         rotated = vectors @ self.R.T  # (N, dim)
 
-        z_vals = rotated[:, self.z_idx]                      # (N, m)
-        self.z_min = z_vals.min().item()
-        self.z_max = z_vals.max().item()
+        z_vals = rotated[:, self.z_idx].reshape(-1)          # (N*m,) flat
+
+        if percentile_clip > 0.0:
+            lo = torch.quantile(z_vals.float(), percentile_clip).item()
+            hi = torch.quantile(z_vals.float(), 1.0 - percentile_clip).item()
+            self.z_min = lo
+            self.z_max = hi
+        else:
+            self.z_min = z_vals.min().item()
+            self.z_max = z_vals.max().item()
 
         x = rotated[:, self.x_idx]
         y = rotated[:, self.y_idx]
-        radii = torch.sqrt(x ** 2 + y ** 2)                  # (N, m)
-        self.r_max = radii.max().item()
+        radii = torch.sqrt(x ** 2 + y ** 2).reshape(-1)      # (N*m,) flat
+
+        if percentile_clip > 0.0:
+            self.r_max = torch.quantile(radii.float(), 1.0 - percentile_clip).item()
+        else:
+            self.r_max = radii.max().item()
+
+    def calibrate_lloyd_max_z(self, vectors: torch.Tensor) -> None:
+        """
+        Fit a Lloyd-Max optimal z quantizer on the provided vectors.
+
+        After calling this, encode() will use Lloyd-Max bin boundaries (instead
+        of uniform bins) and decode() will use Lloyd-Max centroids (instead of
+        uniform bin-centre convention).
+
+        Call calibrate() first so that z_min/z_max/r_max are already tightened.
+        Lloyd-Max is independent of those range values; it operates directly on
+        the empirical z distribution.
+
+        Parameters
+        ----------
+        vectors : Tensor shape (N, dim)  — raw (unrotated) KV vectors
+        """
+        rotated = vectors @ self.R.T               # (N, dim)
+        z_vals = rotated[:, self.z_idx].reshape(-1).float()   # (N*m,)
+
+        lm = LloydMaxQuantizer1D(K=self.bins_z)
+        lm.fit(z_vals)
+        self._lloyd_max_z = lm
 
     # ------------------------------------------------------------------
     # Learned codebook loading
@@ -183,10 +230,15 @@ class StackedPlaneQuantizer:
         x = rotated[:, self.x_idx]                            # (N, m)
         y = rotated[:, self.y_idx]                            # (N, m)
 
-        # --- Quantize z (uniform, left-edge floor) ---
-        delta_z = (self.z_max - self.z_min) / self.bins_z
-        i_z = ((z - self.z_min) / delta_z).floor().long()
-        i_z = i_z.clamp(0, self.bins_z - 1)                  # (N, m)
+        # --- Quantize z ---
+        if self._lloyd_max_z is not None:
+            # Optimal Lloyd-Max bins for non-uniform z distribution
+            i_z = self._lloyd_max_z.encode(z.reshape(-1)).reshape(z.shape)
+        else:
+            # Uniform bins (legacy / default)
+            delta_z = (self.z_max - self.z_min) / self.bins_z
+            i_z = ((z - self.z_min) / delta_z).floor().long()
+            i_z = i_z.clamp(0, self.bins_z - 1)              # (N, m)
 
         if self._codebooks is not None:
             # --- Learned path: nearest centroid per z-slice ---
@@ -231,9 +283,14 @@ class StackedPlaneQuantizer:
         i_flat = codes & mask_flat                            # (N, m) long
         i_z = (codes >> bits_flat).long()                    # (N, m) long
 
-        # --- Recover z using bin-center convention (minimises bias) ---
-        delta_z = (self.z_max - self.z_min) / self.bins_z
-        z_q = self.z_min + (i_z.float() + 0.5) * delta_z    # (N, m)
+        # --- Recover z ---
+        if self._lloyd_max_z is not None:
+            # Lloyd-Max centroid lookup (optimal reconstruction)
+            z_q = self._lloyd_max_z.decode(i_z.reshape(-1)).reshape(i_z.shape)
+        else:
+            # Uniform bin-centre convention (minimises bias for uniform bins)
+            delta_z = (self.z_max - self.z_min) / self.bins_z
+            z_q = self.z_min + (i_z.float() + 0.5) * delta_z    # (N, m)
 
         if self._codebooks is not None:
             # --- Learned path: centroid table lookup; no cos/sin needed ---
@@ -268,6 +325,35 @@ class StackedPlaneQuantizer:
 
         # --- Un-rotate ---
         return rotated_q @ self.R_inv.T                       # (N, dim)
+
+    # ------------------------------------------------------------------
+    # Lloyd-Max serialisation
+    # ------------------------------------------------------------------
+
+    def save_lloyd_max_z(self, path: str | Path) -> None:
+        """
+        Persist the fitted Lloyd-Max z quantizer to a .npz file.
+
+        Keys added: ``z_boundaries`` (K+1,), ``z_centroids`` (K,).
+        If the file already exists (e.g. a codebook .npz), existing keys are
+        preserved and only the Lloyd-Max keys are added or overwritten.
+
+        Parameters
+        ----------
+        path : str | Path  — destination .npz file
+        """
+        if self._lloyd_max_z is None:
+            raise RuntimeError("Call calibrate_lloyd_max_z() first.")
+        self._lloyd_max_z.save(path)
+
+    def load_lloyd_max_z(self, path: str | Path) -> None:
+        """
+        Load a previously fitted Lloyd-Max z quantizer from a .npz file.
+
+        The .npz must contain keys ``z_boundaries`` and ``z_centroids``.
+        After loading, encode/decode will use the optimal Lloyd-Max bins.
+        """
+        self._lloyd_max_z = LloydMaxQuantizer1D.load(path)
 
     # ------------------------------------------------------------------
     # Bias calibration
