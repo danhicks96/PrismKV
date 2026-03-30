@@ -4,6 +4,43 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [0.6.0] — 2026-03-30
+
+### Added
+- **M7 Adaptive Bit Allocation**: `BitAllocator` — water-filling allocation from
+  per-head attention entropy; `sensitivity = 1 / H(l, h)` drives more bits to
+  sharp (low-entropy) heads
+- `prismkv.eval.attention_entropy` — `attention_entropy_from_weights()`,
+  `collect_attention_entropy()` utilities
+- `PrismKVCache` now accepts `configs: List[PrismKVConfig]` for per-layer bit budgets
+- `scripts/build_bit_alloc.py` — CLI to compute and save bit allocations from
+  a calibration run
+- `examples/adaptive_demo.py` — GPT-2 style adaptive allocation demo
+- 18 new tests in `test_bit_alloc.py`
+- Post-rounding greedy correction in `BitAllocator` ensures `mean_bits_per_dim`
+  matches target within `1/(6n)` after discrete config rounding
+
+---
+
+## [0.5.0] — 2026-03-30
+
+### Added
+- **M6 RAG Framework**: full Retrieval-Augmented Generation pipeline
+- `prismkv.rag.VectorStore` — SQLite-backed cosine-similarity store (pure torch)
+- `prismkv.rag.GraphIndex` — NetworkX DiGraph with SQLite-persisted adjacency;
+  BFS expansion at retrieval depth=2
+- `prismkv.rag.RAGEngine` — public API: `ingest()`, `retrieve()`, `generate()`
+- `TextAdapter`, `DictAdapter`, `FileAdapter` — ingestion adapters; `DictAdapter`
+  converts game-state dicts to natural-language sentences per field
+- `ContextAssembler` — token-budget-aware context window builder
+- SHA-256 content deduplication; `timestamp` ordering for narrative coherence
+- `examples/rag_demo.py`, `examples/usurper_rag_demo.py` — CPU-only demos
+  (no model downloads; swap in ollama for real use)
+- 50+ new tests across `test_rag_adapters.py`, `test_rag_ingestion.py`,
+  `test_rag_engine.py`
+
+---
+
 ## [0.4.0] — 2026-03-30
 
 ### Added
