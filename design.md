@@ -323,6 +323,128 @@ static const ggml_type_traits_t ggml_type_prismkv_4 = {
 /* vec_dot implementation: calls prismkv_polar_attn_fwd for the head slice */
 ```
 
+#### Static 3-D Cartesian Codebook Variant (Zero-Trig Inference)
+
+An alternative to the Lloyd-Max z-only table above: pre-compute and store the full 3-D
+Cartesian dequantized `(x, y)` values for every `(i_z, i_r, i_theta)` combination.
+This eliminates all trigonometric operations at inference time at the cost of larger storage.
+
+```c
+/* 3-D Cartesian codebook — stores pre-computed (x, y) for every code combination.
+ * Size: C_Z × C_R × C_THETA × 2 coordinates × 2 bytes (fp16)
+ *     = 16 × 16 × 16 × 2 × 2 = 16,384 bytes = 16 KB per layer.
+ *
+ * Loaded into L2 cache (persistent) once per layer; shared across all heads.
+ * Eliminates __cosf()/__sinf() during token generation — pure SRAM lookup + FMA.
+ */
+#define C_Z     16
+#define C_R     16
+#define C_THETA 16
+
+typedef struct {
+    ggml_fp16_t xy[C_Z][C_R][C_THETA][2];  /* [i_z][i_r][i_theta][0=x, 1=y] */
+    float       z_centroids[C_Z];           /* Lloyd-Max z reconstruction values */
+    float       reserved[12];               /* pad to 256-byte alignment         */
+} prismkv_cartesian_codebook_t;             /* 16,432 bytes total                */
+
+/* Decode a single triplet group (zero-trig path):
+ *   x = codebook.xy[i_z][i_r][i_theta][0]
+ *   y = codebook.xy[i_z][i_r][i_theta][1]
+ *   z = codebook.z_centroids[i_z]
+ * Then dot with query triplet (q_z, q_x, q_y) directly — no polar conversion needed.
+ */
+```
+
+**Memory tradeoff summary:**
+
+| Codebook variant                   | Size    | Trig at inference | Warp divergence |
+|------------------------------------|---------|-------------------|-----------------|
+| Polar params only (uniform z)      | 40 B    | yes (`__cosf`)    | none            |
+| Lloyd-Max z centroids              | 132 B   | yes (`__cosf`)    | none            |
+| 3-D Cartesian (full, this section) | 16 KB   | none              | none            |
+
+For consumer inference (llama.cpp, ExLlamaV2): the 16 KB Cartesian codebook is the preferred
+path because it matches the GGML block-quantization paradigm and keeps the hot path as
+integer unpacking + FP16 FMA, with no transcendental math in the decode loop.
+
+#### GGML Block Structure and Nibble Packing
+
+GGML requires elements to be grouped into fixed-size blocks for vectorised memory reads.
+Using 16 triplets per block (48 dimensions, 12 bits per triplet = 24 bytes):
+
+```c
+#define PRISMKV_TRIPLETS_PER_BLOCK 16
+
+/* Quantized KV block — stored in the KV cache (24 + 2 bytes = 26 bytes per 48 dims).
+ * At 4 bits/dim: 48 dims × 4 bits / 8 = 24 bytes for indices + 2 bytes scale factor.
+ * Compression vs FP16: 96 bytes → 26 bytes = 3.7× (or 4.0× without scale factor).
+ */
+typedef struct {
+    ggml_fp16_t d;          /* optional block-level scale; omit for pure-polar mode */
+    uint8_t     qs[24];     /* 16 triplets × 12 bits = 192 bits = 24 bytes          */
+} block_q_prismkv_4b;       /* 26 bytes represents 48 dimensions                    */
+
+/* Nibble packing layout — 3 bytes per 2 triplets (each triplet = 12 bits):
+ *
+ *   Byte 0: [ i_z[0](4b)  | i_r[0](4b)  ]
+ *   Byte 1: [ i_theta[0](4b) | i_z[1](4b) ]
+ *   Byte 2: [ i_r[1](4b)  | i_theta[1](4b) ]
+ *
+ *   This 3-byte / 2-triplet pattern repeats 8 times for 16 triplets.
+ */
+
+/* --- Pack two triplets into 3 bytes --- */
+static inline void prismkv_pack_2triplets(
+    uint8_t iz0, uint8_t ir0, uint8_t it0,
+    uint8_t iz1, uint8_t ir1, uint8_t it1,
+    uint8_t out[3])
+{
+    out[0] = (iz0 << 4) | (ir0 & 0xF);
+    out[1] = (it0 << 4) | (iz1 & 0xF);
+    out[2] = (ir1 << 4) | (it1 & 0xF);
+}
+
+/* --- Unpack two triplets from 3 bytes (CUDA device function) --- */
+__device__ static inline void prismkv_unpack_2triplets(
+    const uint8_t src[3],
+    uint8_t *iz0, uint8_t *ir0, uint8_t *it0,
+    uint8_t *iz1, uint8_t *ir1, uint8_t *it1)
+{
+    *iz0 = (src[0] >> 4) & 0xF;
+    *ir0 =  src[0]       & 0xF;
+    *it0 = (src[1] >> 4) & 0xF;
+    *iz1 =  src[1]       & 0xF;
+    *ir1 = (src[2] >> 4) & 0xF;
+    *it1 =  src[2]       & 0xF;
+}
+
+/* --- Inner decode loop (CUDA kernel hot path, Cartesian codebook variant) ---
+ *
+ * Processes one block_q_prismkv_4b, accumulates dot product with query triplets.
+ * No branching, no trig — purely SRAM lookup + FP16→FP32 FMA.
+ *
+ * __shared__ prismkv_cartesian_codebook_t s_cb;  // loaded once per block
+ *
+ * float acc = 0.0f;
+ * for (int t = 0; t < PRISMKV_TRIPLETS_PER_BLOCK; t += 2) {
+ *     uint8_t iz0, ir0, it0, iz1, ir1, it1;
+ *     prismkv_unpack_2triplets(&block->qs[t * 3 / 2],
+ *                              &iz0, &ir0, &it0, &iz1, &ir1, &it1);
+ *     float x0 = __half2float(s_cb.xy[iz0][ir0][it0][0]);
+ *     float y0 = __half2float(s_cb.xy[iz0][ir0][it0][1]);
+ *     float z0 = s_cb.z_centroids[iz0];
+ *     acc += q[3*t+0] * z0 + q[3*t+1] * x0 + q[3*t+2] * y0;
+ *     // ... repeat for triplet 1
+ * }
+ */
+```
+
+**Key properties of this layout:**
+- Every thread executes the same instruction sequence regardless of `i_z` — no warp divergence
+- All memory accesses are coalesced (sequential reads from `qs[]`, SRAM lookup from `s_cb`)
+- The 16 KB codebook fits in L2 cache and can be made resident with `cudaFuncSetAttribute`
+  `(CUDA_FUNC_ATTR_PREFERRED_SHARED_MEMORY_CARVEOUT, CUDA_SHAREDMEM_CARVEOUT_MAX_SHARED)`
+
 #### Consumer Hardware Adoption Path
 
 | Engine        | Integration point                  | Status                    |
