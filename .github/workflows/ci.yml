@@ -8,8 +8,9 @@ on:
 
 jobs:
   # -----------------------------------------------------------------------
-  # test-core: quantizer + learned codebooks + bias correction
+  # test-core: quantizer + learned codebooks + bias correction + bit_alloc
   # No transformers required. Must pass in <2 min.
+  # Coverage scoped to src/prismkv/quantizer only.
   # -----------------------------------------------------------------------
   test-core:
     name: Core tests (no transformers)
@@ -38,25 +39,27 @@ jobs:
             tests/test_quantizer.py \
             tests/test_learned_codebooks.py \
             tests/test_bias_correction.py \
+            tests/test_bit_alloc.py \
             -v --tb=short
 
-      - name: Coverage (core)
+      - name: Coverage (core quantizer modules)
         run: |
           pip install pytest-cov
           python -m pytest \
             tests/test_quantizer.py \
             tests/test_learned_codebooks.py \
             tests/test_bias_correction.py \
-            --cov=src/prismkv \
+            tests/test_bit_alloc.py \
+            --cov=src/prismkv/quantizer \
             --cov-report=term-missing \
             --cov-fail-under=85
 
   # -----------------------------------------------------------------------
-  # test-eval: KV collector + cache + benchmark (requires transformers)
-  # Permitted 10 min. PyPI publish does NOT wait for this job.
+  # test-eval: full suite including RAG, cache, KV collector, benchmark
+  # Requires transformers + networkx. Permitted 10 min.
   # -----------------------------------------------------------------------
   test-eval:
-    name: Eval + cache tests (transformers)
+    name: Eval + cache + RAG tests (transformers)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -74,12 +77,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev,eval,cache]"
+          pip install -e ".[dev,eval,cache,rag]"
 
-      - name: Run eval + cache tests
+      - name: Run full test suite
         timeout-minutes: 10
         run: |
           python -m pytest \
             tests/test_kv_collector.py \
             tests/test_kv_cache.py \
+            tests/test_bit_alloc.py \
+            tests/test_rag_adapters.py \
+            tests/test_rag_ingestion.py \
+            tests/test_rag_engine.py \
             -v --tb=short

@@ -36,6 +36,9 @@ eval = [
 cache = [
     "transformers>=4.36.0",
 ]
+rag = [
+    "networkx>=3.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/danhicks96/PrismKV"
