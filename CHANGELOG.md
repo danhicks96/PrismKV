@@ -4,6 +4,30 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [1.1.0] — 2026-03-30
+
+### Added
+- **M12 Framework-agnostic integration layer** — PrismKV no longer requires
+  HuggingFace; any inference engine that exposes raw PyTorch K/V tensors can
+  use it directly
+- `prismkv.cache.backend`: `CacheBackend` protocol + `PrismKVBackend` concrete
+  implementation — all compression math in one place, no framework coupling
+- `prismkv.cache.raw_cache`: `RawKVCache` — drop-in for custom autoregressive
+  loops; single or dict-of-backends; multi-layer; thread-safe; memory footprint
+  diagnostics
+- `prismkv.cache.vllm_adapter`: `VLLMSwapCompressor` — compresses vLLM KV
+  blocks at the CPU swap boundary (GPU→CPU on eviction, CPU→GPU on restore);
+  documents in-GPU compression architecture for future CUDA work
+- `prismkv.sidecar`: `PrismKVSidecar` — stdlib-only HTTP service exposing
+  `POST /compress`, `POST /decompress`, `GET /health`; any language/engine
+  can call it; `python -m prismkv.sidecar --port 8765`
+- `scripts/run_sidecar.py` — CLI entry point for the sidecar
+- 36 new tests in `test_m12_framework_agnostic.py`
+- `prismkv.cache` re-exports `CacheBackend`, `PrismKVBackend`, `RawKVCache`,
+  `VLLMSwapCompressor` alongside existing HF exports
+
+---
+
 ## [1.0.0] — 2026-03-30
 
 ### Added
