@@ -46,6 +46,7 @@ jobs:
             tests/test_polar_attention.py \
             tests/test_e2e_benchmark.py \
             tests/test_m12_framework_agnostic.py \
+            tests/test_calibration_quality.py \
             -v --tb=short
 
       - name: Coverage (core quantizer modules)
@@ -59,6 +60,7 @@ jobs:
             tests/test_polar_attention.py \
             tests/test_e2e_benchmark.py \
             tests/test_m12_framework_agnostic.py \
+            tests/test_calibration_quality.py \
             --cov=src/prismkv/quantizer \
             --cov-report=term-missing \
             --cov-fail-under=85
