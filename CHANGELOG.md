@@ -4,6 +4,23 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ---
 
+## [0.8.0] — 2026-03-30
+
+### Added
+- **M9 Polar-space attention approximation** — novel prior-art contribution:
+  attention scores computed directly from PrismKV codes without full dequantization
+- `polar_dot_product(q, k_z, k_r, k_theta)` — exact polar identity:
+  `<q, k> = Σ q_z·k_z + r_q·r_k·cos(θ_q - θ_k)` per triplet group
+- `polar_dot_product_from_codes(q, k_codes, ..., R=)` — unpacks int16 codes,
+  dequantizes in-place, applies rotation, returns (b, nh, sq, sk) score matrix
+- `PolarAttentionApprox` — drop-in scaled-dot-product approximation; accepts R
+  for automatic query rotation; supports causal and additive masks
+- `measure_polar_approx_error` — diagnostic: mean/max abs error + cosine similarity
+  vs exact Cartesian dot product
+- 15 new tests in `test_polar_attention.py`
+
+---
+
 ## [0.7.0] — 2026-03-30
 
 ### Added
