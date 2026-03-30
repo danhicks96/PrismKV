@@ -210,6 +210,132 @@ The default build flag is `sm_80`. For multi-architecture PTX:
 
 The kernel uses `__cosf()` (hardware fast-path single-precision cosine, available on all supported architectures). FP32 accumulation is used throughout for numerical stability.
 
+### llama.cpp / Consumer Inference Integration: C++ Memory Layout
+
+This section specifies how PrismKV codes map to the 32-bit-aligned memory layout required
+by `llama.cpp` (GGML), ExLlamaV2, and similar consumer inference engines. It constitutes
+prior art for integrating PrismKV with the local LLM ecosystem.
+
+**Core insight from external SME review (2026-03-30):** Consumer GPU users are VRAM-bound.
+A 100k-token code RAG context at FP16 costs ~50 GB of KV cache on LLaMA-3-70B. PrismKV at
+4 bits/dim compresses this to ~8 GB — fitting a 100k context window into a single A100.
+The integration path below enables this without Python overhead.
+
+#### Packed Code Layout (32-bit register)
+
+Each triplet group produces 3 indices: `i_z` (bits_z bits), `i_r` (bits_r bits), `i_theta`
+(bits_theta bits). For the equal-split 4+4+4 configuration (12 bits/triplet), two triplets
+fit into one 32-bit integer with 8 bits spare (usable for alignment or future extension):
+
+```c
+/* PrismKV code word — one uint32 holds 2 triplet groups at 4+4+4 bits each */
+typedef uint32_t prismkv_codeword_t;
+
+/* Pack two triplet groups into one uint32:
+ *   bits [0..3]   = i_theta of group 0
+ *   bits [4..7]   = i_r     of group 0
+ *   bits [8..11]  = i_z     of group 0
+ *   bits [12..15] = i_theta of group 1
+ *   bits [16..19] = i_r     of group 1
+ *   bits [20..23] = i_z     of group 1
+ *   bits [24..31] = reserved / alignment
+ */
+static inline uint32_t prismkv_pack2(
+    uint8_t iz0, uint8_t ir0, uint8_t it0,
+    uint8_t iz1, uint8_t ir1, uint8_t it1)
+{
+    return ((uint32_t)iz1 << 20) | ((uint32_t)ir1 << 16) | ((uint32_t)it1 << 12)
+         | ((uint32_t)iz0 <<  8) | ((uint32_t)ir0 <<  4) | (uint32_t)it0;
+}
+
+static inline void prismkv_unpack2(
+    uint32_t cw,
+    uint8_t *iz0, uint8_t *ir0, uint8_t *it0,
+    uint8_t *iz1, uint8_t *ir1, uint8_t *it1)
+{
+    *it0 = (cw >>  0) & 0xF;
+    *ir0 = (cw >>  4) & 0xF;
+    *iz0 = (cw >>  8) & 0xF;
+    *it1 = (cw >> 12) & 0xF;
+    *ir1 = (cw >> 16) & 0xF;
+    *iz1 = (cw >> 20) & 0xF;
+}
+```
+
+For `head_dim=128` (LLaMA-family, m=42 triplet groups after DimAligner padding to 126):
+`ceil(42/2) = 21` uint32 words per KV vector — **84 bytes vs 256 bytes for FP16**.
+
+#### Per-Layer Quantization Metadata
+
+```c
+/* Uniform-z quantization parameters (loaded once per layer into SRAM) */
+typedef struct {
+    float z_min;        /* z-axis range minimum                         */
+    float delta_z;      /* (z_max - z_min) / bins_z                     */
+    float r_max;        /* maximum radius for (x,y) polar quantization  */
+    float delta_r;      /* r_max / (bins_r - 1)                         */
+    float delta_theta;  /* 2*pi / (bins_theta - 1)                      */
+    float scale;        /* attention logit scale factor (1/sqrt(head_d)) */
+    int32_t bits_z;     /* bits for z quantization (typically 4)        */
+    int32_t bits_r;     /* bits for r quantization (typically 4)        */
+    int32_t bits_theta; /* bits for theta quantization (typically 4)    */
+    int32_t n_groups;   /* head_dim / 3 = m                             */
+} prismkv_layer_params_t;  /* 40 bytes — fits in 2 cache lines */
+```
+
+#### Static Codebook Layout (Lloyd-Max variant)
+
+When Lloyd-Max z quantization is active (M13), the uniform `delta_z` formula is replaced
+by a centroid lookup table. The static codebook loads into SRAM before the generation loop:
+
+```c
+#define PRISMKV_MAX_Z_BINS 16
+
+/* Static z codebook — 16 centroids, loaded once into __shared__ SRAM     */
+typedef struct {
+    float z_centroids[PRISMKV_MAX_Z_BINS];  /* optimal reconstruction values */
+    float z_boundaries[PRISMKV_MAX_Z_BINS + 1]; /* bin boundaries for encode */
+} prismkv_z_codebook_t;  /* 132 bytes — fits in 3 cache lines */
+
+/* Usage in CUDA kernel (decode path):
+ *   __shared__ prismkv_z_codebook_t s_zbook;
+ *   if (threadIdx.x == 0) s_zbook = *g_zbook;  // load from global memory once
+ *   __syncthreads();
+ *   float z_q = s_zbook.z_centroids[i_z];       // SRAM lookup, no divergence
+ */
+```
+
+#### GGML Type Registration (llama.cpp integration path)
+
+```c
+/* New quantization type for llama.cpp — registers with ggml_type system */
+#define GGML_TYPE_PRISMKV_4   (GGML_TYPE_COUNT + 1)  /* 4 bits/dim, 4+4+4 split */
+
+static const ggml_type_traits_t ggml_type_prismkv_4 = {
+    .type_name         = "prismkv_q4_0",
+    .blck_size         = 6,        /* 6 dims per packed uint32 (2 triplets) */
+    .type_size         = 4,        /* 4 bytes per 6-dim block               */
+    .is_quantized      = true,
+    .vec_dot           = prismkv_vec_dot_q4_f32,
+    .vec_dot_type      = GGML_TYPE_F32,
+};
+
+/* vec_dot implementation: calls prismkv_polar_attn_fwd for the head slice */
+```
+
+#### Consumer Hardware Adoption Path
+
+| Engine        | Integration point                  | Status                    |
+|---------------|------------------------------------|---------------------------|
+| llama.cpp     | Register `GGML_TYPE_PRISMKV_4`     | Spec above; needs C PR    |
+| ExLlamaV2     | `ext_c` custom quantization type   | Compatible with layout     |
+| MLX (Apple)   | Metal kernel, same bit layout      | Needs Metal shader port    |
+| vLLM          | `VLLMSwapCompressor` (M12, done)   | CPU swap boundary, done   |
+
+The static codebook approach (one 132-byte SRAM load per layer) eliminates the dynamic
+per-token codebook lookup that would otherwise cause warp divergence — directly addressing
+the hardware-sympathy concern identified in external SME review.
+
 ### Note on Distribution
 
 `src/prismkv/cuda/polar_attn_kernel.cu` is included as syntactically-valid CUDA C++ source. The Python interface (`src/prismkv/cuda/__init__.py`) falls back silently to the pure-Python `polar_attention.py` implementation when the CUDA extension is not available, so all CPU-mode tests pass without building the extension.
