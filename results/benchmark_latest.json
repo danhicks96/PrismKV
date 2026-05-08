@@ -1,0 +1,173 @@
+{
+  "memory_profiles": [
+    {
+      "scheme": "FP16",
+      "bits_per_dim": 16.0,
+      "context_len": 1024,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 36.0
+    },
+    {
+      "scheme": "3bit",
+      "bits_per_dim": 3.0,
+      "context_len": 1024,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 6.75
+    },
+    {
+      "scheme": "4bit",
+      "bits_per_dim": 4.0,
+      "context_len": 1024,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 9.0
+    },
+    {
+      "scheme": "5bit",
+      "bits_per_dim": 5.0,
+      "context_len": 1024,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 11.25
+    },
+    {
+      "scheme": "FP16",
+      "bits_per_dim": 16.0,
+      "context_len": 4096,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 144.0
+    },
+    {
+      "scheme": "3bit",
+      "bits_per_dim": 3.0,
+      "context_len": 4096,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 27.0
+    },
+    {
+      "scheme": "4bit",
+      "bits_per_dim": 4.0,
+      "context_len": 4096,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 36.0
+    },
+    {
+      "scheme": "5bit",
+      "bits_per_dim": 5.0,
+      "context_len": 4096,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 45.0
+    },
+    {
+      "scheme": "FP16",
+      "bits_per_dim": 16.0,
+      "context_len": 16384,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 576.0
+    },
+    {
+      "scheme": "3bit",
+      "bits_per_dim": 3.0,
+      "context_len": 16384,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 108.0
+    },
+    {
+      "scheme": "4bit",
+      "bits_per_dim": 4.0,
+      "context_len": 16384,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 144.0
+    },
+    {
+      "scheme": "5bit",
+      "bits_per_dim": 5.0,
+      "context_len": 16384,
+      "n_layers": 12,
+      "n_heads": 12,
+      "head_dim": 64,
+      "memory_mb": 180.0
+    }
+  ],
+  "quality_results": [
+    {
+      "scheme": "PrismKV-3bit",
+      "bits_per_dim": 3.0,
+      "rmse": 0.26927268505096436,
+      "cosine_sim_mean": 0.9527393579483032,
+      "relative_error_mean": 0.31294116377830505,
+      "throughput_vps": 1587762.291247525,
+      "n_vectors": 10000
+    },
+    {
+      "scheme": "2DPolar-3bit",
+      "bits_per_dim": 3.0,
+      "rmse": 0.32792890071868896,
+      "cosine_sim_mean": 0.9317847490310669,
+      "relative_error_mean": 0.38121986389160156,
+      "throughput_vps": 2210308.6601183135,
+      "n_vectors": 10000
+    },
+    {
+      "scheme": "PrismKV-4bit",
+      "bits_per_dim": 4.0,
+      "rmse": 0.12944722175598145,
+      "cosine_sim_mean": 0.988791823387146,
+      "relative_error_mean": 0.1504843682050705,
+      "throughput_vps": 2068502.171784285,
+      "n_vectors": 10000
+    },
+    {
+      "scheme": "2DPolar-4bit",
+      "bits_per_dim": 4.0,
+      "rmse": 0.1512565016746521,
+      "cosine_sim_mean": 0.9848566651344299,
+      "relative_error_mean": 0.17574666440486908,
+      "throughput_vps": 3352418.640699899,
+      "n_vectors": 10000
+    },
+    {
+      "scheme": "PrismKV-5bit",
+      "bits_per_dim": 5.0,
+      "rmse": 0.06353162974119186,
+      "cosine_sim_mean": 0.9972835183143616,
+      "relative_error_mean": 0.07386763393878937,
+      "throughput_vps": 2367466.8393212655,
+      "n_vectors": 10000
+    },
+    {
+      "scheme": "2DPolar-5bit",
+      "bits_per_dim": 5.0,
+      "rmse": 0.0730031281709671,
+      "cosine_sim_mean": 0.9964438676834106,
+      "relative_error_mean": 0.08482086658477783,
+      "throughput_vps": 3701278.679580536,
+      "n_vectors": 10000
+    }
+  ],
+  "config": {
+    "head_dim": 64,
+    "n_heads": 12,
+    "n_layers": 12
+  }
+}
