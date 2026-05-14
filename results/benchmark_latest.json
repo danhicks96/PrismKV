@@ -116,7 +116,7 @@
       "rmse": 0.26927268505096436,
       "cosine_sim_mean": 0.9527393579483032,
       "relative_error_mean": 0.31294116377830505,
-      "throughput_vps": 3065665.953290909,
+      "throughput_vps": 3077188.18767362,
       "n_vectors": 10000
     },
     {
@@ -125,7 +125,7 @@
       "rmse": 0.32792890071868896,
       "cosine_sim_mean": 0.9317847490310669,
       "relative_error_mean": 0.38121986389160156,
-      "throughput_vps": 4460766.892029502,
+      "throughput_vps": 4257025.597531243,
       "n_vectors": 10000
     },
     {
@@ -134,7 +134,7 @@
       "rmse": 0.12944722175598145,
       "cosine_sim_mean": 0.988791823387146,
       "relative_error_mean": 0.1504843682050705,
-      "throughput_vps": 3727293.334472394,
+      "throughput_vps": 3479058.321095531,
       "n_vectors": 10000
     },
     {
@@ -143,7 +143,7 @@
       "rmse": 0.1512565016746521,
       "cosine_sim_mean": 0.9848566651344299,
       "relative_error_mean": 0.17574666440486908,
-      "throughput_vps": 6285043.06183582,
+      "throughput_vps": 6168308.491879457,
       "n_vectors": 10000
     },
     {
@@ -152,7 +152,7 @@
       "rmse": 0.06353162974119186,
       "cosine_sim_mean": 0.9972835183143616,
       "relative_error_mean": 0.07386763393878937,
-      "throughput_vps": 4066164.631508258,
+      "throughput_vps": 3978497.0057124174,
       "n_vectors": 10000
     },
     {
@@ -161,7 +161,7 @@
       "rmse": 0.0730031281709671,
       "cosine_sim_mean": 0.9964438676834106,
       "relative_error_mean": 0.08482086658477783,
-      "throughput_vps": 7256499.094572724,
+      "throughput_vps": 7103498.642990914,
       "n_vectors": 10000
     }
   ],
